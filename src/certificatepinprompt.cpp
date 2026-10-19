@@ -17,7 +17,7 @@ QVariantMap CertificatePinPrompt::view() const { return m_view; }
 
 bool CertificatePinPrompt::update(const XccPinView *view)
 {
-    if (!view || view->struct_size < sizeof(*view) || view->abi_version != XCC_ABI_VERSION) {
+    if (!view || view->struct_size < XCC_PIN_VIEW_V1_SIZE || view->abi_version != XCC_ABI_VERSION) {
         return false;
     }
     if (m_settled) {
@@ -27,31 +27,50 @@ bool CertificatePinPrompt::update(const XccPinView *view)
         return false;
     }
     QString purpose;
-    const auto suppliedPurpose = QString::fromUtf8(view->purpose_display);
-    if (suppliedPurpose == "prove who you are to a server"_L1) {
-        purpose = i18n("Authenticate to a server");
-    } else if (suppliedPurpose == "sign a document or a piece of data"_L1) {
-        purpose = i18n("Sign a document or data");
-    } else if (suppliedPurpose == "sign or read secure email"_L1) {
-        purpose = i18n("Use secure email");
-    } else if (suppliedPurpose == "authenticate an SSH connection"_L1) {
-        purpose = i18n("Authenticate an SSH connection");
+    if (view->struct_size < offsetof(XccPinView, generic_purpose) + sizeof(view->generic_purpose)) {
+        purpose = QString::fromUtf8(view->purpose_display);
     } else {
         purpose = i18n("Use a certificate");
+        if (!view->generic_purpose) {
+            switch (view->purpose) {
+            case XCC_PURPOSE_CLIENT_AUTH:
+                purpose = i18n("Authenticate to a server");
+                break;
+            case XCC_PURPOSE_SIGNING:
+                purpose = i18n("Sign a document or data");
+                break;
+            case XCC_PURPOSE_EMAIL:
+                purpose = i18n("Use secure email");
+                break;
+            case XCC_PURPOSE_SSH:
+                purpose = i18n("Authenticate an SSH connection");
+                break;
+            }
+        }
     }
     QString retry = m_view.value(u"retry"_s).toString();
-    if (view->status) {
-        // The ABI supplies policy-owned English status strings, not an enum.
-        // Translate known statuses; do not display arbitrary library errors.
-        const auto status = QString::fromUtf8(view->status);
-        if (status == "That PIN was not accepted. Try again."_L1) {
-            retry = i18n("That PIN was not accepted. Try again.");
-        } else if (status == "Enter the PIN for this token."_L1) {
-            retry = i18n("Enter the PIN for this token.");
-        } else if (status == "PIN exceeds the supported length."_L1) {
-            retry = i18n("PIN exceeds the supported length.");
+    const bool hasStatusCode = view->struct_size >= offsetof(XccPinView, status_code) + sizeof(view->status_code);
+    const bool wantsFreshInput = hasStatusCode ? view->status_code != XCC_PIN_STATUS_NONE : view->status != nullptr;
+    if (wantsFreshInput) {
+        if (!hasStatusCode) {
+            retry = QString::fromUtf8(view->status);
         } else {
-            retry = i18n("The PIN could not be submitted. Try again.");
+            switch (view->status_code) {
+            case XCC_PIN_STATUS_INCORRECT:
+                retry = i18n("That PIN was not accepted. Try again.");
+                break;
+            case XCC_PIN_STATUS_REQUIRED:
+                retry = i18n("Enter the PIN for this token.");
+                break;
+            case XCC_PIN_STATUS_TOO_LONG:
+                retry = i18n("PIN exceeds the supported length.");
+                break;
+            case XCC_PIN_STATUS_MEMORY_UNAVAILABLE:
+                retry = i18n("The PIN could not be held in secure memory.");
+                break;
+            default:
+                retry = i18n("The PIN could not be submitted. Try again.");
+            }
         }
         m_submitted = false;
         Q_EMIT freshInput();
@@ -62,8 +81,10 @@ bool CertificatePinPrompt::update(const XccPinView *view)
         : view->count_low          ? i18n("The PIN has been entered incorrectly. Only a "
                                           "few attempts may remain.")
                                    : QString();
+    const bool tokenFallback = view->struct_size >= offsetof(XccPinView, display_flags) + sizeof(view->display_flags)
+        && (view->display_flags & XCC_DISPLAY_TOKEN_FALLBACK);
     m_view = {
-        { u"token"_s, QString::fromUtf8(view->token_label) },
+        { u"token"_s, tokenFallback ? i18n("Unnamed token") : QString::fromUtf8(view->token_label) },
         { u"reader"_s, QString::fromUtf8(view->reader) },
         { u"caller"_s, view->caller_display && *view->caller_display ? QString::fromUtf8(view->caller_display) : i18n("An unidentified application") },
         { u"purpose"_s, purpose },

@@ -19,6 +19,22 @@ Kirigami.AbstractApplicationWindow {
     function present(): void {
         Kirigami.Settings.isMobile ? showMaximized() : show();
     }
+    function announceState(): void {
+        if (!visible)
+            return;
+        const message = candidateModel.takeAnnouncement();
+        if (message.length > 0)
+            content.Accessible.announce(message);
+    }
+    // Defer until presentation has made the accessible item visible. Taking the
+    // pending state once also prevents an unchanged remap from announcing again.
+    onVisibleChanged: if (visible) Qt.callLater(root.announceState)
+    Connections {
+        target: root.candidateModel
+        function onAnnouncementPending(): void {
+            Qt.callLater(root.announceState);
+        }
+    }
     onClosing: close => {
         close.accepted = false;
         reject();
@@ -46,6 +62,9 @@ Kirigami.AbstractApplicationWindow {
 
     // This dialog stays alive until the core closes it, including stale choices.
     ColumnLayout {
+        id: content
+        Accessible.role: Accessible.Pane
+        Accessible.name: root.title
         anchors.fill: parent
         anchors.margins: Kirigami.Units.largeSpacing
         QQC2.Label {
@@ -142,7 +161,14 @@ Kirigami.AbstractApplicationWindow {
                             }
                             QQC2.Label {
                                 Layout.fillWidth: true
-                                text: delegate.issuer + "\n" + delegate.token + "\n" + delegate.reader + "\n" + delegate.expiry + "\n" + delegate.detail + "\n" + delegate.fingerprint
+                                text: delegate.issuer + "\n" + delegate.token + "\n" + delegate.reader
+                                textFormat: Text.PlainText
+                                wrapMode: Text.WrapAnywhere
+                            }
+                            QQC2.Label {
+                                Layout.fillWidth: true
+                                // The model formats validity and key data in the user's locale.
+                                text: delegate.expiry + "\n" + delegate.detail + "\n" + delegate.fingerprint
                                 textFormat: Text.PlainText
                                 wrapMode: Text.WrapAnywhere
                             }

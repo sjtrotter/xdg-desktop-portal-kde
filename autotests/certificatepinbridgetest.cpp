@@ -5,6 +5,7 @@
 #include "certificateui.h"
 #include "certificateuitesthelpers.h"
 
+#include <KLocalizedString>
 #include <QGuiApplication>
 #include <QKeyEvent>
 #include <QPointer>
@@ -40,6 +41,7 @@ class CertificatePinBridgeTest : public QObject
         view.reader = "Reader";
         view.caller_display = "Example application";
         view.purpose_display = "sign a document or a piece of data";
+        view.purpose = XCC_PURPOSE_SIGNING;
         view.protected_path = protectedPath;
         return view;
     }
@@ -72,6 +74,23 @@ private Q_SLOTS:
         QVERIFY2(certificateTestBusHasNoActivation(QDBusConnection::sessionBus()), "Run through certificate-test-session.sh");
     }
     void init() { fakePin = { }; }
+    void structuredTextAndOldPrefix()
+    {
+        CertificatePinPrompt prompt(fakePinContext(), 1);
+        auto view = pinView();
+        view.purpose_display = "English purpose must be ignored";
+        view.status = "English status must be ignored";
+        view.status_code = XCC_PIN_STATUS_MEMORY_UNAVAILABLE;
+        view.display_flags = XCC_DISPLAY_TOKEN_FALLBACK;
+        QVERIFY(prompt.update(&view));
+        QCOMPARE(prompt.view().value(u"purpose"_s).toString(), i18n("Sign a document or data"));
+        QCOMPARE(prompt.view().value(u"retry"_s).toString(), i18n("The PIN could not be held in secure memory."));
+        QCOMPARE(prompt.view().value(u"token"_s).toString(), i18n("Unnamed token"));
+        view.struct_size = XCC_PIN_VIEW_V1_SIZE;
+        QVERIFY(prompt.update(&view));
+        QCOMPARE(prompt.view().value(u"purpose"_s).toString(), QString::fromUtf8(view.purpose_display));
+        QCOMPARE(prompt.view().value(u"retry"_s).toString(), QString::fromUtf8(view.status));
+    }
     void wrongThenRightAndBusyCancellation()
     {
         CertificateUi bridge;
@@ -117,6 +136,7 @@ private Q_SLOTS:
         view.busy = false;
         ui.pin_update(ui.user, 11, &view);
         view.status = "That PIN was not accepted. Try again.";
+        view.status_code = XCC_PIN_STATUS_INCORRECT;
         ui.pin_update(ui.user, 11, &view);
         QVERIFY(!prompt->view().value(u"retry"_s).toString().isEmpty());
         QVERIFY(!prompt->view().value(u"busy"_s).toBool());

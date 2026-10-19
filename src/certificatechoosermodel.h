@@ -2,6 +2,7 @@
 #pragma once
 
 #include <QAbstractListModel>
+#include <QSet>
 #include <QVariantMap>
 #include <xdp-certificate/ui.h>
 
@@ -21,6 +22,8 @@ public:
     Qt::ItemFlags flags(const QModelIndex &index) const override;
     bool update(const XccChooserView *view);
     Q_INVOKABLE void selectRow(int row);
+    // The UI consumes pending state only after the chooser is presented.
+    Q_INVOKABLE QString takeAnnouncement();
     int selectedRow() const;
     bool hasSelection() const;
     uint64_t selectedId() const;
@@ -29,6 +32,7 @@ public:
 Q_SIGNALS:
     void selectionChanged();
     void viewChanged();
+    void announcementPending();
 
 private:
     struct Row {
@@ -39,4 +43,7 @@ private:
     QList<Row> m_rows;
     uint64_t m_selected = 0, m_revision = 0;
     QVariantMap m_context;
+    QSet<uint64_t> m_candidateIds;
+    QString m_announcement;
+    bool m_announcementPending = false;
 };

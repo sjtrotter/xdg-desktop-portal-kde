@@ -2,10 +2,45 @@
 #include "certificatechoosermodel.h"
 
 #include <KLocalizedString>
+#include <QDateTime>
+#include <QLocale>
 #include <QSet>
 #include <utility>
 
 using namespace Qt::StringLiterals;
+
+static QString formatValidity(const XccChooserCandidateView *row)
+{
+    if (row->struct_size < offsetof(XccChooserCandidateView, validity) + sizeof(row->validity)) {
+        return QString::fromUtf8(row->expiry);
+    }
+    switch (row->validity) {
+    case XCC_VALIDITY_NOT_YET_VALID:
+        return i18n("Not yet valid");
+    case XCC_VALIDITY_VALID:
+    case XCC_VALIDITY_EXPIRED: {
+        const auto expiry = row->not_after > 0 ? QDateTime::fromSecsSinceEpoch(row->not_after) : QDateTime();
+        const auto date = expiry.isValid() ? QLocale().toString(expiry.date(), QLocale::ShortFormat) : i18n("an unknown date");
+        return row->validity == XCC_VALIDITY_EXPIRED ? i18n("Expired on %1", date) : i18n("Valid until %1", date);
+    }
+    default:
+        return i18n("Unknown validity date");
+    }
+}
+
+static QString formatKey(const XccChooserCandidateView *row)
+{
+    if (row->struct_size < offsetof(XccChooserCandidateView, key_size) + sizeof(row->key_size)) {
+        return QString::fromUtf8(row->detail);
+    }
+    auto keyType = QString::fromUtf8(row->key_type);
+    if (keyType.isEmpty()) {
+        keyType = i18n("Unknown key type");
+    } else if (keyType == "unsupported"_L1) {
+        keyType = i18n("Unsupported key type");
+    }
+    return i18n("%1 %2-bit", keyType, row->key_size);
+}
 
 CertificateChooserModel::CertificateChooserModel(QObject *parent)
     : QAbstractListModel(parent)
@@ -59,20 +94,35 @@ Qt::ItemFlags CertificateChooserModel::flags(const QModelIndex &index) const
 
 bool CertificateChooserModel::update(const XccChooserView *view)
 {
-    if (!view || view->struct_size < sizeof(*view) || view->abi_version != XCC_ABI_VERSION) {
+    if (!view || view->struct_size < XCC_CHOOSER_VIEW_V1_SIZE || view->abi_version != XCC_ABI_VERSION) {
         return false;
     }
     QList<Row> rows;
     QSet<uint64_t> ids;
     for (size_t i = 0; i < view->n_candidates; ++i) {
         const auto *row = xcc_chooser_view_candidate(view, i);
-        if (!row || row->struct_size < sizeof(*row) || row->abi_version != XCC_ABI_VERSION || !row->id || ids.contains(row->id)) {
+        if (!row || row->struct_size < XCC_CHOOSER_CANDIDATE_VIEW_V1_SIZE || row->abi_version != XCC_ABI_VERSION || !row->id || ids.contains(row->id)) {
             return false;
         }
         ids.insert(row->id);
-        rows.append({ row->id, QString::fromUtf8(row->subject), QString::fromUtf8(row->issuer), QString::fromUtf8(row->token), QString::fromUtf8(row->reader),
-            QString::fromUtf8(row->expiry), QString::fromUtf8(row->detail), QString::fromUtf8(row->fingerprint), true, row->invalid });
+        const auto displayFlags = row->struct_size >= offsetof(XccChooserCandidateView, display_flags) + sizeof(row->display_flags) ? row->display_flags : 0;
+        rows.append({ row->id, displayFlags & XCC_DISPLAY_SUBJECT_FALLBACK ? i18n("Unnamed certificate") : QString::fromUtf8(row->subject),
+            displayFlags & XCC_DISPLAY_ISSUER_FALLBACK ? i18n("Unnamed issuer") : QString::fromUtf8(row->issuer),
+            displayFlags & XCC_DISPLAY_TOKEN_FALLBACK ? i18n("Unnamed token") : QString::fromUtf8(row->token), QString::fromUtf8(row->reader),
+            formatValidity(row), formatKey(row), QString::fromUtf8(row->fingerprint), true, row->invalid });
     }
+    const auto announcement = rows.isEmpty()
+        ? (view->tokens_present ? i18n("Insert your security token. No certificate on the available tokens matches this request.")
+                                : i18n("Insert your security token"))
+        : i18n("Certificates available on your security tokens");
+    // Compare identity sets, not counts or row positions: replacement can add a
+    // candidate without changing the count, while reordering adds nothing.
+    const bool announcementChanged = announcement != m_announcement || !(ids - m_candidateIds).isEmpty();
+    if (announcementChanged) {
+        m_announcementPending = true;
+    }
+    m_announcement = announcement;
+    m_candidateIds = ids;
     // Disable removed rows before notifying views of structural changes. Consent
     // and selection always check availability against this current snapshot.
     for (int i = 0; i < m_rows.size(); ++i) {
@@ -118,10 +168,10 @@ bool CertificateChooserModel::update(const XccChooserView *view)
         purposeDetail = i18n("The application will be able to authenticate SSH connections as you until access expires. It cannot read the private key.");
         break;
     }
-    // ABI v1 supplies the module's generic-purpose distinction as trusted
-    // backend wording rather than an enum. Recognize that wording for translation;
-    // it affects disclosure only, never permissions or identity.
-    if (QString::fromUtf8(view->purpose_text) == u"is asking to use a certificate on your security token.") {
+    if (view->struct_size < offsetof(XccChooserView, generic_purpose) + sizeof(view->generic_purpose)) {
+        purpose = QString::fromUtf8(view->purpose_text);
+        purposeDetail = QString::fromUtf8(view->purpose_detail);
+    } else if (view->generic_purpose) {
         purpose = i18n("Use a certificate on your security token");
         purposeDetail = i18n("The application will be able to use this key until access expires. It cannot read the private key.");
     }
@@ -130,7 +180,9 @@ bool CertificateChooserModel::update(const XccChooserView *view)
         : view->may_sign                                   ? i18n("It allows signing only.")
                                                            : i18n("It allows no operations.");
     const auto appId = QString::fromUtf8(view->app_id);
-    m_context = { { u"caller"_s, appId.isEmpty() ? i18n("An unidentified application") : QString::fromUtf8(view->caller_name) }, { u"appId"_s, appId },
+    const bool callerFallback = view->struct_size >= offsetof(XccChooserView, display_flags) + sizeof(view->display_flags)
+        && (view->display_flags & XCC_DISPLAY_CALLER_FALLBACK);
+    m_context = { { u"caller"_s, callerFallback || !view->caller_name ? i18n("An unidentified application") : QString::fromUtf8(view->caller_name) }, { u"appId"_s, appId },
         { u"identity"_s, identity }, { u"purpose"_s, purpose }, { u"purposeDetail"_s, purposeDetail }, { u"scope"_s, scope },
         { u"duration"_s, i18np("Access lasts for %1 second.", "Access lasts for %1 seconds.", view->lifetime_seconds) },
         { u"laterPrompt"_s, i18n("You may be asked for your PIN the first time the key is used.") }, { u"reason"_s, QString::fromUtf8(view->untrusted_reason) },
@@ -138,7 +190,18 @@ bool CertificateChooserModel::update(const XccChooserView *view)
     endResetModel();
     Q_EMIT selectionChanged();
     Q_EMIT viewChanged();
+    if (announcementChanged) {
+        Q_EMIT announcementPending();
+    }
     return true;
+}
+
+QString CertificateChooserModel::takeAnnouncement()
+{
+    if (!std::exchange(m_announcementPending, false)) {
+        return {};
+    }
+    return m_announcement;
 }
 
 void CertificateChooserModel::selectRow(int row)
