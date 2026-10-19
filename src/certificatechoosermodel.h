@@ -14,7 +14,7 @@ class CertificateChooserModel : public QAbstractListModel
     Q_PROPERTY(int count READ rowCount NOTIFY viewChanged)
     Q_PROPERTY(QVariantMap context READ context NOTIFY viewChanged)
 public:
-    enum Role { Subject = Qt::UserRole + 1, Issuer, Token, Reader, Expiry, Detail, Fingerprint, Enabled, Invalid, TextFormat };
+    enum Role { Subject = Qt::UserRole + 1, Issuer, Token, Reader, Expiry, Detail, Fingerprint, Enabled, Invalid, TextFormat, CandidateId };
     explicit CertificateChooserModel(QObject *parent = nullptr);
     int rowCount(const QModelIndex &parent = { }) const override;
     QVariant data(const QModelIndex &index, int role) const override;
@@ -30,6 +30,7 @@ public:
     uint64_t revision() const;
     QVariantMap context() const;
 Q_SIGNALS:
+    void snapshotAboutToChange();
     void selectionChanged();
     void viewChanged();
     void announcementPending();

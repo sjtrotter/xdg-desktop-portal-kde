@@ -76,6 +76,9 @@ QVariant CertificateChooserModel::data(const QModelIndex &index, int role) const
         return row.invalid;
     case TextFormat:
         return int(Qt::PlainText);
+    case CandidateId:
+        // QML numbers cannot represent every 64-bit candidate identity exactly.
+        return QString::number(qulonglong(row.id));
     default:
         return { };
     }
@@ -84,7 +87,7 @@ QVariant CertificateChooserModel::data(const QModelIndex &index, int role) const
 QHash<int, QByteArray> CertificateChooserModel::roleNames() const
 {
     return { { Subject, "subject" }, { Issuer, "issuer" }, { Token, "token" }, { Reader, "reader" }, { Expiry, "expiry" }, { Detail, "detail" },
-        { Fingerprint, "fingerprint" }, { Enabled, "available" }, { Invalid, "invalid" }, { TextFormat, "textFormat" } };
+        { Fingerprint, "fingerprint" }, { Enabled, "available" }, { Invalid, "invalid" }, { TextFormat, "textFormat" }, { CandidateId, "candidateId" } };
 }
 
 Qt::ItemFlags CertificateChooserModel::flags(const QModelIndex &index) const
@@ -123,6 +126,8 @@ bool CertificateChooserModel::update(const XccChooserView *view)
     }
     m_announcement = announcement;
     m_candidateIds = ids;
+    // Let the UI capture availability while the previous snapshot is intact.
+    Q_EMIT snapshotAboutToChange();
     // Disable removed rows before notifying views of structural changes. Consent
     // and selection always check availability against this current snapshot.
     for (int i = 0; i < m_rows.size(); ++i) {
@@ -182,10 +187,12 @@ bool CertificateChooserModel::update(const XccChooserView *view)
     const auto appId = QString::fromUtf8(view->app_id);
     const bool callerFallback = view->struct_size >= offsetof(XccChooserView, display_flags) + sizeof(view->display_flags)
         && (view->display_flags & XCC_DISPLAY_CALLER_FALLBACK);
-    m_context = { { u"caller"_s, callerFallback || !view->caller_name ? i18n("An unidentified application") : QString::fromUtf8(view->caller_name) }, { u"appId"_s, appId },
+    const auto heading = callerFallback || !view->caller_name ? i18n("An unidentified application wants to use a certificate")
+        : i18n("%1 wants to use a certificate", QString::fromUtf8(view->caller_name));
+    m_context = { { u"heading"_s, heading }, { u"caller"_s, callerFallback || !view->caller_name ? i18n("An unidentified application") : QString::fromUtf8(view->caller_name) }, { u"appId"_s, appId },
         { u"identity"_s, identity }, { u"purpose"_s, purpose }, { u"purposeDetail"_s, purposeDetail }, { u"scope"_s, scope },
         { u"duration"_s, i18np("Access lasts for %1 second.", "Access lasts for %1 seconds.", view->lifetime_seconds) },
-        { u"laterPrompt"_s, i18n("You may be asked for your PIN the first time the key is used.") }, { u"reason"_s, QString::fromUtf8(view->untrusted_reason) },
+        { u"laterPrompt"_s, view->later_prompt && *view->later_prompt ? i18n("After you choose, you will be asked for your security token PIN.") : QString() }, { u"reason"_s, QString::fromUtf8(view->untrusted_reason) },
         { u"tokensPresent"_s, view->tokens_present } };
     endResetModel();
     Q_EMIT selectionChanged();

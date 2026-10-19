@@ -6,12 +6,44 @@
 #include <QLocale>
 #include <QSignalSpy>
 #include <QTest>
+#include <limits>
 #include <utility>
 
 class CertificateChooserModelTest : public QObject
 {
     Q_OBJECT
 private Q_SLOTS:
+    void candidateIdentityRole()
+    {
+        CertificateChooserModel model;
+        XccChooserCandidateView rows[2] { };
+        for (int i = 0; i < 2; ++i) {
+            rows[i].struct_size = sizeof(rows[i]);
+            rows[i].abi_version = XCC_ABI_VERSION;
+            rows[i].id = std::numeric_limits<uint64_t>::max() - i;
+        }
+        XccChooserView view { };
+        view.struct_size = sizeof(view);
+        view.abi_version = XCC_ABI_VERSION;
+        view.candidates = rows;
+        view.n_candidates = 2;
+        QVERIFY(model.update(&view));
+        QCOMPARE(model.roleNames().value(CertificateChooserModel::CandidateId), QByteArray("candidateId"));
+        const auto firstId = model.data(model.index(0), CertificateChooserModel::CandidateId);
+        QCOMPARE(firstId.metaType(), QMetaType::fromType<QString>());
+        QCOMPARE(firstId.toString(), QStringLiteral("18446744073709551615"));
+        QCOMPARE(model.data(model.index(1), CertificateChooserModel::CandidateId).toString(), QStringLiteral("18446744073709551614"));
+        QVERIFY(!model.hasSelection());
+
+        // Focus can follow an unselected identity even when the rows reorder.
+        std::swap(rows[0], rows[1]);
+        ++view.revision;
+        QVERIFY(model.update(&view));
+        QCOMPARE(model.data(model.index(0), CertificateChooserModel::CandidateId).toString(), QStringLiteral("18446744073709551614"));
+        QCOMPARE(model.data(model.index(1), CertificateChooserModel::CandidateId), firstId);
+        QVERIFY(!model.hasSelection());
+    }
+
     void announcements()
     {
         CertificateChooserModel model;
@@ -162,6 +194,31 @@ private Q_SLOTS:
         QCOMPARE(model.data(model.index(0), CertificateChooserModel::Issuer).toString(), i18n("Unnamed issuer"));
         QCOMPARE(model.data(model.index(0), CertificateChooserModel::Token).toString(), i18n("Unnamed token"));
         QCOMPARE(model.context().value(QStringLiteral("caller")).toString(), i18n("An unidentified application"));
+    }
+
+    void disclosure()
+    {
+        CertificateChooserModel model;
+        XccChooserView view { };
+        view.struct_size = sizeof(view);
+        view.abi_version = XCC_ABI_VERSION;
+        view.caller_name = "<b>Caller</b>";
+        view.later_prompt = "SDK later-prompt signal";
+        QVERIFY(model.update(&view));
+        QCOMPARE(model.context().value(QStringLiteral("heading")).toString(), i18n("%1 wants to use a certificate", QStringLiteral("<b>Caller</b>")));
+        QCOMPARE(model.context().value(QStringLiteral("laterPrompt")).toString(), i18n("After you choose, you will be asked for your security token PIN."));
+        view.display_flags = XCC_DISPLAY_CALLER_FALLBACK;
+        view.later_prompt = "";
+        QVERIFY(model.update(&view));
+        QCOMPARE(model.context().value(QStringLiteral("heading")).toString(), i18n("An unidentified application wants to use a certificate"));
+        QVERIFY(model.context().value(QStringLiteral("laterPrompt")).toString().isEmpty());
+        view.caller_name = nullptr;
+        view.display_flags = 0;
+        view.later_prompt = nullptr;
+        view.struct_size = XCC_CHOOSER_VIEW_V1_SIZE;
+        QVERIFY(model.update(&view));
+        QCOMPARE(model.context().value(QStringLiteral("heading")).toString(), i18n("An unidentified application wants to use a certificate"));
+        QVERIFY(model.context().value(QStringLiteral("laterPrompt")).toString().isEmpty());
     }
 
     void olderAndPartialLayouts()
