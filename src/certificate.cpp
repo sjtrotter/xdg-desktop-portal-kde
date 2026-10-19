@@ -4,6 +4,7 @@
  */
 #include "certificate.h"
 
+#include "certificateconfig.h"
 #include "certificatedispatcher.h"
 #include "certificateui.h"
 
@@ -190,13 +191,6 @@ private:
     bool isSession;
     std::function<void(const QDBusMessage &)> closeCall;
 };
-
-XccConfig defaultConfig()
-{
-    auto config = input<XccConfig>();
-    config.has_display = qGuiApp && (QGuiApplication::platformName() == "wayland"_L1 || QGuiApplication::platformName() == "xcb"_L1);
-    return config;
-}
 }
 
 class CertificatePortal::State : public QObject
@@ -486,8 +480,12 @@ public:
 };
 
 CertificatePortal::CertificatePortal(QObject *parent)
-    : CertificatePortal(parent, QDBusConnection::sessionBus(), defaultConfig())
+    : QDBusAbstractAdaptor(parent)
 {
+    const CertificateConfig settings;
+    auto config = settings.config();
+    config.has_display = qGuiApp && (QGuiApplication::platformName() == "wayland"_L1 || QGuiApplication::platformName() == "xcb"_L1);
+    d = std::make_unique<State>(this, QDBusConnection::sessionBus(), config, nullptr);
 }
 
 CertificatePortal::CertificatePortal(QObject *parent, const QDBusConnection &bus, const XccConfig &config, const XccUiV1 *ui)

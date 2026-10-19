@@ -26,6 +26,31 @@ Discover and printing commands), restricting their crash diagnostics too; actual
 dump behaviour also depends on core_pattern. A separate PIN helper would keep
 these restrictions outside the desktop-wide backend, but is not implemented.
 
+Certificate configuration
+-------------------------
+
+The backend reads `xdg-desktop-portal-kderc`, group `[Certificate]`, once at
+startup. Restart the backend after changing it. `Modules` is a KConfig string
+list (comma-separated paths, with KConfig escaping); an absent or empty list
+uses p11-kit's registered modules. `AllowSoftwareTokens` is a boolean, default
+`false`. For a disposable SoftHSM test, for example:
+
+```ini
+[Certificate]
+Modules=/usr/lib64/pkcs11/libsofthsm2.so
+AllowSoftwareTokens=true
+```
+
+These are user settings with the same trust level as the standalone service's
+`--module` and `--allow-software-tokens` flags. Module paths load code in the
+backend. Neither setting is read from environment variables. As with the
+standalone service, explicitly selected modules can expose software tokens even
+when `AllowSoftwareTokens=false`; the SDK's existing module policy is unchanged.
+
+`certificateconfigtest` uses a temporary `XDG_CONFIG_HOME` (and config search
+path) to check defaults, list parsing, both overrides and the startup snapshot.
+It needs no display, bus or PKCS#11 module.
+
 Test isolation
 --------------
 

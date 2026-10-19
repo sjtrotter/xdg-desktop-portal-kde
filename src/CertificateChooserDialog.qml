@@ -30,6 +30,19 @@ Kirigami.AbstractApplicationWindow {
         sequence: StandardKey.Cancel
         onActivated: root.reject()
     }
+    Shortcut {
+        sequence: "Down"
+        onActivated: root.candidateModel.selectRow(Math.min(root.candidateModel.selectedRow + 1, root.candidateModel.count - 1))
+    }
+    Shortcut {
+        sequence: "Up"
+        onActivated: root.candidateModel.selectRow(Math.max(root.candidateModel.selectedRow - 1, 0))
+    }
+    Shortcut {
+        sequences: ["Return", "Enter"]
+        enabled: root.candidateModel.hasSelection && !buttons.standardButton(QQC2.DialogButtonBox.Cancel).activeFocus
+        onActivated: root.accept()
+    }
 
     // This dialog stays alive until the core closes it, including stale choices.
     ColumnLayout {
@@ -146,6 +159,7 @@ Kirigami.AbstractApplicationWindow {
             }
         }
         QQC2.DialogButtonBox {
+            id: buttons
             Layout.fillWidth: true
             standardButtons: QQC2.DialogButtonBox.Ok | QQC2.DialogButtonBox.Cancel
             onAccepted: root.accept()
