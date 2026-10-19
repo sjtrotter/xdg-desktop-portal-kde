@@ -333,14 +333,16 @@ if(BUILD_CERTIFICATE_PORTAL)
         certificate.cpp certificate.h
         certificatedispatcher.cpp certificatedispatcher.h
         certificatechoosermodel.cpp certificatechoosermodel.h
-        certificateui.cpp certificateui.h)
+        certificateui.cpp certificateui.h
+        certificatepinfield.cpp certificatepinfield.h
+        certificatepinprompt.cpp certificatepinprompt.h)
     target_link_libraries(certificateportal PUBLIC Qt::Core Qt::DBus PkgConfig::XCC
         PRIVATE Qt::Quick Qt::Widgets KF6::I18n KF6::I18nQml KF6::WindowSystem)
     target_include_directories(certificateportal PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
     target_compile_definitions(certificateportal PRIVATE TRANSLATION_DOMAIN="xdg-desktop-portal-kde")
     target_compile_definitions(xdg-desktop-portal-kde PRIVATE BUILD_CERTIFICATE_PORTAL)
     target_link_libraries(xdg-desktop-portal-kde PRIVATE certificateportal)
-    ecm_target_qml_sources(xdg-desktop-portal-kde SOURCES CertificateChooserDialog.qml)
+    ecm_target_qml_sources(xdg-desktop-portal-kde SOURCES CertificateChooserDialog.qml CertificatePinDialog.qml)
 endif()
 
 target_link_libraries(xdg-desktop-portal-kde

@@ -11,12 +11,17 @@ skip() { echo "SKIP: $*" >&2; exit 77; }
 for tool in softhsm2-util pkcs11-tool certtool; do
     command -v "$tool" >/dev/null || skip "$tool is unavailable"
 done
-if [ -z "${XDP_CERTIFICATE_REFERENCE_ADAPTER:-}" ]; then
-    skip "set XDP_CERTIFICATE_REFERENCE_ADAPTER to the certificate repo's build/tests/certificate-reference-adapter"
+if [ "${CERTIFICATE_TEST_REQUIRE_REFERENCE:-1}" = 1 ]; then
+    if [ -z "${XDP_CERTIFICATE_REFERENCE_ADAPTER:-}" ]; then
+        skip "set XDP_CERTIFICATE_REFERENCE_ADAPTER to the certificate repo's build/tests/certificate-reference-adapter"
+    fi
+    if [ ! -x "$XDP_CERTIFICATE_REFERENCE_ADAPTER" ]; then
+        echo "Reference adapter is not executable: $XDP_CERTIFICATE_REFERENCE_ADAPTER" >&2
+        exit 1
+    fi
 fi
-if [ ! -x "$XDP_CERTIFICATE_REFERENCE_ADAPTER" ]; then
-    echo "Reference adapter is not executable: $XDP_CERTIFICATE_REFERENCE_ADAPTER" >&2
-    exit 1
+if [ "${CERTIFICATE_TEST_ALWAYS_AUTH:-0}" = 1 ]; then
+    command -v openssl >/dev/null || skip "openssl is unavailable"
 fi
 if [ -z "${SOFTHSM_MODULE:-}" ]; then
     for module in /usr/lib64/pkcs11/libsofthsm2.so /usr/lib64/softhsm/libsofthsm2.so \
@@ -61,8 +66,18 @@ certtool --generate-self-signed --load-privkey "$SOFTHSM_FIXTURE_DIR/client.p8" 
     --template "$SOFTHSM_FIXTURE_DIR/client.tmpl" --outder \
     --outfile "$SOFTHSM_FIXTURE_DIR/portal-test-rsa.der" 2>/dev/null
 # Test-only PINs, matching the certificate repository's fixture approach.
-softhsm2-util --module "$SOFTHSM_MODULE" --import "$SOFTHSM_FIXTURE_DIR/client.p8" \
-    --token "$label" --label portal-test-rsa --id 01 --pin 123456 >/dev/null
+if [ "${CERTIFICATE_TEST_ALWAYS_AUTH:-0}" = 1 ]; then
+    # Import the same certificate's key with per-operation authentication.
+    openssl rsa -in "$SOFTHSM_FIXTURE_DIR/client.p8" -outform DER -traditional \
+        -out "$SOFTHSM_FIXTURE_DIR/client-key.der" 2>/dev/null
+    pkcs11-tool --module "$SOFTHSM_MODULE" --token-label "$label" --login --pin 123456 \
+        --write-object "$SOFTHSM_FIXTURE_DIR/client-key.der" --type privkey --id 01 \
+        --label portal-test-rsa --usage-sign --private --sensitive --always-auth >/dev/null
+    rm -f "$SOFTHSM_FIXTURE_DIR/client-key.der"
+else
+    softhsm2-util --module "$SOFTHSM_MODULE" --import "$SOFTHSM_FIXTURE_DIR/client.p8" \
+        --token "$label" --label portal-test-rsa --id 01 --pin 123456 >/dev/null
+fi
 pkcs11-tool --module "$SOFTHSM_MODULE" --token-label "$label" --login --pin 123456 \
     --write-object "$SOFTHSM_FIXTURE_DIR/portal-test-rsa.der" --type cert --id 01 --label portal-test-rsa >/dev/null
 rm -f "$SOFTHSM_FIXTURE_DIR/client.p8" "$SOFTHSM_FIXTURE_DIR/client.tmpl"

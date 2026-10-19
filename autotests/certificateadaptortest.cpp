@@ -1,7 +1,16 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 #include "certificate.h"
+#include "certificateui.h"
+#include "certificatepinfield.h"
+#include "certificatepinprompt.h"
 #include "certificatetesthelpers.h"
+#include "certificateuitesthelpers.h"
 
+#include <QCryptographicHash>
+#include <QGuiApplication>
+#include <QKeyEvent>
+#include <QQuickWindow>
+#include <QTemporaryDir>
 #include <QDBusArgument>
 #include <QDBusConnectionInterface>
 #include <QDBusPendingCallWatcher>
@@ -55,6 +64,8 @@ class CertificateAdaptorTest : public QObject
     int shown = 0, closed = 0;
     int pinPrompts = 0;
     bool chooseFirst = false;
+    bool nativePin = false;
+    CertificateUi nativeUi;
     QString busAddress;
 
     QDBusPendingCall call(const QDBusConnection &sender, const QString &method, const QVariantList &args,
@@ -107,11 +118,12 @@ class CertificateAdaptorTest : public QObject
         }
     }
 
-    void installPortal(const char *const *modules, bool selectFirst = false)
+    void installPortal(const char *const *modules, bool selectFirst = false, bool useNativePin = false)
     {
         backend->unregisterObject(u"/org/freedesktop/portal/desktop"_s);
         delete object; // Drain the previous SDK context before creating another.
         chooseFirst = selectFirst;
+        nativePin = useNativePin;
         auto ui = certificateTestUi();
         ui.user = this;
         ui.chooser_show = [](void *user, XccUiId id, const XccChooserView *view) {
@@ -126,11 +138,39 @@ class CertificateAdaptorTest : public QObject
             }
         };
         ui.chooser_update = ui.chooser_show;
-        ui.pin_show = [](void *user, XccUiId id, const XccPinView *) {
-            ++static_cast<CertificateAdaptorTest *>(user)->pinPrompts;
-            xcc_ui_failed(testContext, id, XCC_ERROR_DEVICE);
+        ui.pin_show = [](void *user, XccUiId id, const XccPinView *view) {
+            auto test = static_cast<CertificateAdaptorTest *>(user);
+            ++test->pinPrompts;
+            if (test->nativePin) {
+                test->nativeUi.attach(testContext);
+                auto native = test->nativeUi.table();
+                native.pin_show(native.user, id, view);
+            } else {
+                xcc_ui_failed(testContext, id, XCC_ERROR_DEVICE);
+            }
         };
-        ui.close = [](void *user, XccUiId) { ++static_cast<CertificateAdaptorTest *>(user)->closed; };
+        ui.pin_update = [](void *user, XccUiId id, const XccPinView *view) {
+            auto test = static_cast<CertificateAdaptorTest *>(user);
+            if (test->nativePin) {
+                auto native = test->nativeUi.table();
+                native.pin_update(native.user, id, view);
+            }
+        };
+        ui.warning = [](void *user, XccUiId id, const XccWarning *warning) {
+            auto test = static_cast<CertificateAdaptorTest *>(user);
+            auto native = test->nativeUi.table();
+            native.warning(native.user, id, warning);
+        };
+        ui.hide = [](void *user, XccUiId id) {
+            auto native = static_cast<CertificateAdaptorTest *>(user)->nativeUi.table();
+            native.hide(native.user, id);
+        };
+        ui.close = [](void *user, XccUiId id) {
+            auto test = static_cast<CertificateAdaptorTest *>(user);
+            ++test->closed;
+            auto native = test->nativeUi.table();
+            native.close(native.user, id);
+        };
         XccConfig config{ };
         config.struct_size = sizeof(config);
         config.abi_version = XCC_ABI_VERSION;
@@ -158,12 +198,13 @@ class CertificateAdaptorTest : public QObject
 private Q_SLOTS:
     void initTestCase()
     {
+        QVERIFY2(certificateTestBusHasNoActivation(QDBusConnection::sessionBus()), "Run through certificate-test-session.sh");
         const auto executable = QStandardPaths::findExecutable(u"dbus-daemon"_s);
         if (executable.isEmpty()) {
             QSKIP("dbus-daemon is unavailable");
         }
         daemon.setProgram(executable);
-        daemon.setArguments({ u"--session"_s, u"--nofork"_s, u"--print-address=1"_s });
+        daemon.setArguments({ u"--config-file="_s + QString::fromUtf8(CERTIFICATE_TEST_BUS_CONFIG), u"--nofork"_s, u"--print-address=1"_s });
         daemon.start();
         if (!daemon.waitForStarted(3000) || !daemon.waitForReadyRead(3000)) {
             QSKIP("Cannot start a private session bus");
@@ -177,6 +218,7 @@ private Q_SLOTS:
         if (!backend->isConnected() || !frontend->isConnected() || !stranger->isConnected() || !successor->isConnected()) {
             QSKIP("Cannot connect to the private session bus");
         }
+        QVERIFY(certificateTestBusHasNoActivation(*backend));
         QVERIFY(frontend->registerService(u"org.freedesktop.portal.Desktop"_s));
         const char *modules[] = { nullptr };
         installPortal(modules);
@@ -405,6 +447,139 @@ private Q_SLOTS:
         QCOMPARE(reference.exitCode(), 0);
     }
 
+    void grantedSignWithNativePin()
+    {
+        const auto directory = qEnvironmentVariable("SOFTHSM_FIXTURE_DIR");
+        const auto module = qgetenv("SOFTHSM_MODULE");
+        const auto openssl = QStandardPaths::findExecutable(u"openssl"_s);
+        if (directory.isEmpty() || module.isEmpty() || openssl.isEmpty()) {
+            QSKIP("Run certificate-softhsm-fixture.sh with SoftHSM and openssl available");
+        }
+        const auto restore = qScopeGuard([this] {
+            const char *empty[] = {nullptr};
+            installPortal(empty);
+        });
+        const char *modules[] = {module.constData(), nullptr};
+        installPortal(modules, true, true);
+        QVERIFY(portal->isValid());
+        pinPrompts = 0;
+        verifyResponse(wait(call(*frontend, u"CreateSession"_s, createArgs(u"pinsign"_s))), 0);
+        const auto acquired = wait(call(*frontend, u"AcquireCredential"_s, acquireArgs(u"pinsign"_s)));
+        QCOMPARE(acquired.type(), QDBusMessage::ReplyMessage);
+        QCOMPARE(acquired.arguments()[0], QVariant(uint(0)));
+        const auto result = acquisitionResults(acquired);
+        const auto certificate = result.value(u"certificate_der"_s).toByteArray();
+        QVERIFY(!certificate.isEmpty());
+        QCOMPARE(pinPrompts, 0); // Acquisition grants access, never logs in.
+        const auto digest = QCryptographicHash::hash("KDE native PIN signing test", QCryptographicHash::Sha256);
+        auto args = acquireArgs(u"pinsign"_s);
+        args[0] = QVariant::fromValue(QDBusObjectPath(u"/request/sign_pinsign"_s));
+        args[4] = QVariantMap{
+            {u"mechanism"_s, u"RSA_PKCS1_V1_5"_s}, {u"data"_s, digest},
+            {u"parameters"_s, QVariantMap{{u"hash"_s, u"SHA256"_s}}},
+        };
+        auto signing = call(*frontend, u"Sign"_s, args);
+        QTRY_COMPARE_WITH_TIMEOUT(pinPrompts, 1, 10000);
+        auto prompt = nativeUi.findChild<CertificatePinPrompt *>();
+        QVERIFY(prompt);
+        QTRY_VERIFY(prompt->view().value(u"ready"_s).toBool());
+        QQuickWindow *dialog = nullptr;
+        for (auto window : QGuiApplication::allWindows()) {
+            if (auto quick = qobject_cast<QQuickWindow *>(window); quick && quick->isVisible()) {
+                dialog = quick;
+                break;
+            }
+        }
+        QVERIFY(dialog);
+        auto field = dialog->findChild<CertificatePinField *>();
+        QVERIFY(field);
+        QKeyEvent wrong(QEvent::KeyPress, Qt::Key_unknown, {}, u"000000"_s);
+        QCoreApplication::sendEvent(field, &wrong);
+        QVERIFY(QMetaObject::invokeMethod(dialog, "accept"));
+        QTRY_VERIFY_WITH_TIMEOUT(!prompt->view().value(u"retry"_s).toString().isEmpty(), 10000);
+        QVERIFY(!prompt->view().value(u"busy"_s).toBool());
+        QCOMPARE(field->maskedCount(), 0);
+        QKeyEvent right(QEvent::KeyPress, Qt::Key_unknown, {}, u"123456"_s);
+        QCoreApplication::sendEvent(field, &right);
+        QVERIFY(QMetaObject::invokeMethod(dialog, "accept"));
+        const bool alwaysAuth = qEnvironmentVariableIntValue("CERTIFICATE_TEST_ALWAYS_AUTH") == 1;
+        if (alwaysAuth) {
+            QTRY_COMPARE_WITH_TIMEOUT(pinPrompts, 2, 10000);
+            prompt = nativeUi.findChild<CertificatePinPrompt *>();
+            QVERIFY(prompt);
+            QTRY_VERIFY(prompt->view().value(u"ready"_s).toBool());
+            QVERIFY(prompt->view().value(u"contextSpecific"_s).toBool());
+            dialog = nullptr;
+            for (auto window : QGuiApplication::allWindows()) {
+                if (auto quick = qobject_cast<QQuickWindow *>(window); quick && quick->isVisible()) {
+                    dialog = quick;
+                    break;
+                }
+            }
+            QVERIFY(dialog);
+            field = dialog->findChild<CertificatePinField *>();
+            QVERIFY(field);
+            QCoreApplication::sendEvent(field, &right);
+            QVERIFY(QMetaObject::invokeMethod(dialog, "accept"));
+        }
+        const auto signedReply = wait(signing);
+        QCOMPARE(signedReply.type(), QDBusMessage::ReplyMessage);
+        QCOMPARE(signedReply.arguments()[0], QVariant(uint(0)));
+        const auto signature = qdbus_cast<QVariantMap>(signedReply.arguments()[1]).value(u"signature"_s).toByteArray();
+        QVERIFY(!signature.isEmpty());
+        QTemporaryDir temporary;
+        QVERIFY(temporary.isValid());
+        const auto write = [&temporary](const QString &name, const QByteArray &data) {
+            QFile file(temporary.filePath(name));
+            return file.open(QIODevice::WriteOnly) && file.write(data) == data.size();
+        };
+        QVERIFY(write(u"certificate.der"_s, certificate));
+        QVERIFY(write(u"digest"_s, digest));
+        QVERIFY(write(u"signature"_s, signature));
+        QProcess extract;
+        extract.start(openssl, {u"x509"_s, u"-inform"_s, u"DER"_s, u"-in"_s, temporary.filePath(u"certificate.der"_s), u"-pubkey"_s, u"-noout"_s});
+        QVERIFY(extract.waitForFinished(5000));
+        QCOMPARE(extract.exitCode(), 0);
+        QVERIFY(write(u"public.pem"_s, extract.readAllStandardOutput()));
+        QProcess verify;
+        verify.start(openssl, {u"pkeyutl"_s, u"-verify"_s, u"-pubin"_s, u"-inkey"_s, temporary.filePath(u"public.pem"_s),
+            u"-sigfile"_s, temporary.filePath(u"signature"_s), u"-in"_s, temporary.filePath(u"digest"_s),
+            u"-pkeyopt"_s, u"digest:sha256"_s, u"-pkeyopt"_s, u"rsa_padding_mode:pkcs1"_s});
+        QVERIFY(verify.waitForFinished(5000));
+        QCOMPARE(verify.exitStatus(), QProcess::NormalExit);
+        QCOMPARE(verify.exitCode(), 0);
+        QCOMPARE(pinPrompts, alwaysAuth ? 2 : 1);
+        // A second Sign reuses only USER login. An always-authenticate key must
+        // request a fresh CONTEXT_SPECIFIC PIN after operation initialization.
+        args[0] = QVariant::fromValue(QDBusObjectPath(u"/request/sign_pinsign_again"_s));
+        auto second = call(*frontend, u"Sign"_s, args);
+        if (alwaysAuth) {
+            QTRY_COMPARE_WITH_TIMEOUT(pinPrompts, 3, 10000);
+            prompt = nativeUi.findChild<CertificatePinPrompt *>();
+            QVERIFY(prompt);
+            QTRY_VERIFY(prompt->view().value(u"ready"_s).toBool());
+            QVERIFY(prompt->view().value(u"contextSpecific"_s).toBool());
+            dialog = nullptr;
+            for (auto window : QGuiApplication::allWindows()) {
+                if (auto quick = qobject_cast<QQuickWindow *>(window); quick && quick->isVisible()) {
+                    dialog = quick;
+                    break;
+                }
+            }
+            QVERIFY(dialog);
+            field = dialog->findChild<CertificatePinField *>();
+            QVERIFY(field);
+            QCoreApplication::sendEvent(field, &right);
+            QVERIFY(QMetaObject::invokeMethod(dialog, "accept"));
+        }
+        const auto secondReply = wait(second);
+        QCOMPARE(secondReply.type(), QDBusMessage::ReplyMessage);
+        QCOMPARE(secondReply.arguments()[0], QVariant(uint(0)));
+        // PKCS#1 v1.5 is deterministic for this digest; both signatures verify.
+        QCOMPARE(qdbus_cast<QVariantMap>(secondReply.arguments()[1]).value(u"signature"_s).toByteArray(), signature);
+        QCOMPARE(pinPrompts, alwaysAuth ? 3 : 1);
+    }
+
     void frontendOwnerChangeDropsSessions()
     {
         verifyResponse(wait(call(*frontend, u"CreateSession"_s, createArgs(u"owner"_s))), 0);
@@ -446,5 +621,5 @@ private Q_SLOTS:
     }
 };
 
-QTEST_GUILESS_MAIN(CertificateAdaptorTest)
+QTEST_MAIN(CertificateAdaptorTest)
 #include "certificateadaptortest.moc"

@@ -1,3 +1,60 @@
+Certificate portal PIN policy (open KDE review question)
+------------------------------------------------------
+
+The KDE backend uses scoped PIN protection. Retained PIN bytes live only in the
+SDK's XccSecret, which uses mlock and MADV_DONTDUMP; its pages are excluded from
+dumps. mlock is best effort (the SDK logs failure); MADV_DONTDUMP depends on kernel
+support and successful madvise. Conversion buffers and removed bytes are wiped;
+submission transfers ownership, and hide/destruction discard the secret. No PIN
+text is retained in QML, QString/QVariant properties, signals, clipboard, undo or
+IME state, or logged by certificate code. Key text is read synchronously, and
+non-navigation key presses and releases are consumed in the C++ field.
+
+Unlike the standalone xdg-desktop-portal-certificate service (non-dumpable, no
+cores), the KDE backend preserves normal dumpability, core limits and KCrash.
+A crash dump or same-user ptrace of this backend can contain transient PIN copies
+from Qt key events and the input stack despite XccSecret pages being excluded
+from dumps. DrKonqi/KCrash crash reports may contain PIN fragments typed shortly
+before a crash. Scoped protection does not prevent ptrace from reading live PINs.
+
+Open question for KDE reviewers: accept this residual risk, apply process-wide
+hardening, or collect PINs in a separate helper process. Process-wide hardening
+breaks Documents.Info host/KIOFuse path translation and portal-backed Settings,
+directory dialogs and OpenURI; it also removes crash reports for every portal.
+A zero hard RLIMIT_CORE is inherited by launched children (including kbuildsycoca,
+Discover and printing commands), restricting their crash diagnostics too; actual
+dump behaviour also depends on core_pattern. A separate PIN helper would keep
+these restrictions outside the desktop-wide backend, but is not implemented.
+
+Test isolation
+--------------
+
+All certificate UI CTest entries, including the acquisition and both signing
+fixtures, run through certificate-test-session.sh before QApplication starts.
+It uses dbus-run-session with certificate-test-bus.conf: no service directories,
+session-config includes or systemd activation. The adaptor's additional private
+bus uses the same configuration. Real frontend/document portals cannot activate;
+the adaptor still registers its fake frontend and tests the real SDK on its bus.
+Each UI test checks that its bus has no activatable services; the adaptor checks
+both buses. The bridge sends typing and releases through the actual QQuickWindow
+and checks that they do not propagate to ancestor items.
+
+The wrapper unsets QT_QPA_PLATFORMTHEME and QT_QPA_GENERIC_PLUGINS, sets
+QT_NO_XDG_DESKTOP_PORTAL=1, and selects offscreen/software rendering. In Qt 6.11,
+[QDesktopUnixServices](https://github.com/qt/qtbase/blob/6.11/src/gui/platform/unix/qdesktopunixservices.cpp)
+honours that variable for its portal probe. The
+[explicit portal theme](https://github.com/qt/qtbase/blob/6.11/src/plugins/platformthemes/xdgdesktopportal/qxdgdesktopportaltheme.cpp)
+still probes, so the inherited theme selection must also be cleared.
+
+Run UI binaries through the same wrapper when invoking them manually:
+
+```sh
+bash autotests/certificate-test-session.sh /path/to/certificatepinbridgetest
+```
+
+Acquisition fixture
+-------------------
+
 Certificate adaptor acquisition parity uses an isolated SoftHSM token and the
 certificate repository's real GDBus reference adapter with a headless chooser.
 Build that repository with its default service enabled, and install its updated
@@ -17,7 +74,7 @@ The CTest wrapper runs `certificate-softhsm-fixture.sh` through bash. To invoke 
 directly without CTest:
 
 ```sh
-bash autotests/certificate-softhsm-fixture.sh /path/to/certificateadaptortest successfulAcquisitionAndGrantedMalformedSign
+bash autotests/certificate-test-session.sh bash autotests/certificate-softhsm-fixture.sh /path/to/certificateadaptortest successfulAcquisitionAndGrantedMalformedSign
 ```
 
 The script creates a fresh private directory and SoftHSM configuration, initializes

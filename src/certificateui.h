@@ -17,6 +17,9 @@ private:
     struct Interaction;
     void show(XccUiId id, const XccChooserView *view);
     void update(XccUiId id, const XccChooserView *view);
+    void pinShow(XccUiId id, const XccPinView *view);
+    void pinUpdate(XccUiId id, const XccPinView *view);
+    void warning(XccUiId id, const XccWarning *warning);
     void hide(XccUiId id);
     void close(XccUiId id);
     XccContext *m_context = nullptr;
