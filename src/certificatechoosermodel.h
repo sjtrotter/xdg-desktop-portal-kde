@@ -14,7 +14,7 @@ class CertificateChooserModel : public QAbstractListModel
     Q_PROPERTY(int count READ rowCount NOTIFY viewChanged)
     Q_PROPERTY(QVariantMap context READ context NOTIFY viewChanged)
 public:
-    enum Role { Subject = Qt::UserRole + 1, Issuer, Token, Reader, Expiry, Detail, Fingerprint, Enabled, Invalid, TextFormat, CandidateId };
+    enum Role { Subject = Qt::UserRole + 1, Issuer, Token, Reader, Expiry, Detail, Fingerprint, Enabled, Invalid, TextFormat, CandidateId, ExtraDetail };
     explicit CertificateChooserModel(QObject *parent = nullptr);
     int rowCount(const QModelIndex &parent = { }) const override;
     QVariant data(const QModelIndex &index, int role) const override;
@@ -22,6 +22,7 @@ public:
     Qt::ItemFlags flags(const QModelIndex &index) const override;
     bool update(const XccChooserView *view);
     Q_INVOKABLE void selectRow(int row);
+    Q_INVOKABLE int rowForCandidateId(const QString &id) const;
     // The UI consumes pending state only after the chooser is presented.
     Q_INVOKABLE QString takeAnnouncement();
     int selectedRow() const;
@@ -40,6 +41,7 @@ private:
         uint64_t id;
         QString subject, issuer, token, reader, expiry, detail, fingerprint;
         bool enabled, invalid;
+        QString extraDetail;
     };
     QList<Row> m_rows;
     uint64_t m_selected = 0, m_revision = 0;

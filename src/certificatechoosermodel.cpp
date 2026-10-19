@@ -20,8 +20,10 @@ static QString formatValidity(const XccChooserCandidateView *row)
     case XCC_VALIDITY_VALID:
     case XCC_VALIDITY_EXPIRED: {
         const auto expiry = row->not_after > 0 ? QDateTime::fromSecsSinceEpoch(row->not_after) : QDateTime();
-        const auto date = expiry.isValid() ? QLocale().toString(expiry.date(), QLocale::ShortFormat) : i18n("an unknown date");
-        return row->validity == XCC_VALIDITY_EXPIRED ? i18n("Expired on %1", date) : i18n("Valid until %1", date);
+        const auto date = expiry.isValid()
+            ? QLocale().toString(expiry.date(), i18nc("@info certificate expiry date format, see QDate::toString", "d MMM yyyy"))
+            : i18n("an unknown date");
+        return row->validity == XCC_VALIDITY_EXPIRED ? i18n("Expired on %1", date) : i18n("Expires %1", date);
     }
     default:
         return i18n("Unknown validity date");
@@ -40,6 +42,50 @@ static QString formatKey(const XccChooserCandidateView *row)
         keyType = i18n("Unsupported key type");
     }
     return i18n("%1 %2-bit", keyType, row->key_size);
+}
+
+static QString formatDuration(uint32_t seconds)
+{
+    if (seconds && seconds % 3600 == 0) {
+        return i18np("%1 hour", "%1 hours", seconds / 3600);
+    }
+    if (seconds >= 60) {
+        const auto minutes = i18np("%1 minute", "%1 minutes", seconds / 60);
+        return seconds % 60 ? i18n("%1 and %2", minutes, i18np("%1 second", "%1 seconds", seconds % 60)) : minutes;
+    }
+    return i18np("%1 second", "%1 seconds", seconds);
+}
+
+static QString formatBody(const XccChooserView *view)
+{
+    const auto duration = formatDuration(view->lifetime_seconds);
+    QString body;
+    if (view->struct_size < offsetof(XccChooserView, generic_purpose) + sizeof(view->generic_purpose)) {
+        body = i18n("%1 Access lasts %2.", QString::fromUtf8(view->purpose_detail), duration).trimmed();
+    } else if (!view->may_sign && !view->may_decrypt) {
+        body = i18n("Access lasts %1. It cannot sign or decrypt with your certificate.", duration);
+    } else if (view->generic_purpose) {
+        body = view->may_sign && view->may_decrypt ? i18n("It can sign and decrypt data for %1.", duration)
+            : view->may_decrypt ? i18n("It can decrypt data for %1.", duration) : i18n("It can sign data for %1.", duration);
+    } else if (view->purpose == XCC_PURPOSE_EMAIL) {
+        body = view->may_sign && view->may_decrypt ? i18n("It can sign and decrypt email for %1.", duration)
+            : view->may_decrypt ? i18n("It can decrypt email for %1.", duration) : i18n("It can sign email for %1.", duration);
+    } else if (!view->may_sign) {
+        body = i18n("It can decrypt data for %1.", duration);
+    } else if (view->purpose == XCC_PURPOSE_CLIENT_AUTH) {
+        body = view->may_decrypt ? i18n("It can prove who you are to websites and servers and decrypt data for %1.", duration)
+            : i18n("It can prove who you are to websites and servers for %1.", duration);
+    } else if (view->purpose == XCC_PURPOSE_SSH) {
+        body = view->may_decrypt ? i18n("It can sign in to SSH servers and decrypt data for %1.", duration)
+            : i18n("It can sign in to SSH servers for %1.", duration);
+    } else {
+        body = view->may_decrypt ? i18n("It can sign documents and data and decrypt data for %1.", duration)
+            : i18n("It can sign documents and data for %1.", duration);
+    }
+    if (view->later_prompt && *view->later_prompt) {
+        body += u'\n' + i18n("You will enter your PIN next.");
+    }
+    return body;
 }
 
 CertificateChooserModel::CertificateChooserModel(QObject *parent)
@@ -70,6 +116,8 @@ QVariant CertificateChooserModel::data(const QModelIndex &index, int role) const
         return row.detail;
     case Fingerprint:
         return row.fingerprint;
+    case ExtraDetail:
+        return row.extraDetail;
     case Enabled:
         return row.enabled;
     case Invalid:
@@ -87,7 +135,7 @@ QVariant CertificateChooserModel::data(const QModelIndex &index, int role) const
 QHash<int, QByteArray> CertificateChooserModel::roleNames() const
 {
     return { { Subject, "subject" }, { Issuer, "issuer" }, { Token, "token" }, { Reader, "reader" }, { Expiry, "expiry" }, { Detail, "detail" },
-        { Fingerprint, "fingerprint" }, { Enabled, "available" }, { Invalid, "invalid" }, { TextFormat, "textFormat" }, { CandidateId, "candidateId" } };
+        { Fingerprint, "fingerprint" }, { Enabled, "available" }, { Invalid, "invalid" }, { TextFormat, "textFormat" }, { CandidateId, "candidateId" }, { ExtraDetail, "extraDetail" } };
 }
 
 Qt::ItemFlags CertificateChooserModel::flags(const QModelIndex &index) const
@@ -112,11 +160,11 @@ bool CertificateChooserModel::update(const XccChooserView *view)
         rows.append({ row->id, displayFlags & XCC_DISPLAY_SUBJECT_FALLBACK ? i18n("Unnamed certificate") : QString::fromUtf8(row->subject),
             displayFlags & XCC_DISPLAY_ISSUER_FALLBACK ? i18n("Unnamed issuer") : QString::fromUtf8(row->issuer),
             displayFlags & XCC_DISPLAY_TOKEN_FALLBACK ? i18n("Unnamed token") : QString::fromUtf8(row->token), QString::fromUtf8(row->reader),
-            formatValidity(row), formatKey(row), QString::fromUtf8(row->fingerprint), true, row->invalid });
+            formatValidity(row), formatKey(row), QString::fromUtf8(row->fingerprint), true, row->invalid, QString::fromUtf8(row->detail) });
     }
     const auto announcement = rows.isEmpty()
-        ? (view->tokens_present ? i18n("Insert your security token. No certificate on the available tokens matches this request.")
-                                : i18n("Insert your security token"))
+        ? (view->tokens_present ? i18n("No usable certificates on this token. Try a different security token.")
+                                : i18n("Insert your security token. Certificates on it will appear here."))
         : i18n("Certificates available on your security tokens");
     // Compare identity sets, not counts or row positions: replacement can add a
     // candidate without changing the count, while reordering adds nothing.
@@ -142,58 +190,43 @@ bool CertificateChooserModel::update(const XccChooserView *view)
     beginResetModel();
     m_rows = std::move(rows);
     m_revision = view->revision;
-    QString identity;
-    switch (view->identity_level) {
-    case XCC_IDENTITY_VERIFIED_SANDBOXED:
-        identity = i18n("Sandboxed application, identity verified by the system");
-        break;
-    case XCC_IDENTITY_DERIVED_HOST:
-        identity = i18n("Unsandboxed application. This name is a useful label, not proof of identity.");
-        break;
-    default:
-        identity = i18n("This application could not be identified. Only continue if you know what asked.");
+    const bool unknown = view->identity_level == XCC_IDENTITY_UNKNOWN || !view->caller_name || !*view->caller_name
+        || (view->struct_size >= offsetof(XccChooserView, display_flags) + sizeof(view->display_flags)
+            && (view->display_flags & XCC_DISPLAY_CALLER_FALLBACK));
+    const auto caller = unknown ? i18n("An unknown app") : QString::fromUtf8(view->caller_name);
+    const bool generic = view->struct_size >= offsetof(XccChooserView, generic_purpose) + sizeof(view->generic_purpose) && view->generic_purpose;
+    QString heading;
+    if (generic) {
+        heading = i18n("%1 wants to use a certificate", caller);
+    } else {
+        switch (view->purpose) {
+        case XCC_PURPOSE_CLIENT_AUTH:
+            heading = i18n("%1 wants to identify you with a certificate", caller);
+            break;
+        case XCC_PURPOSE_SIGNING:
+            heading = i18n("%1 wants to sign with your certificate", caller);
+            break;
+        case XCC_PURPOSE_EMAIL:
+            heading = i18n("%1 wants to use your email certificate", caller);
+            break;
+        case XCC_PURPOSE_SSH:
+            heading = i18n("%1 wants to use your certificate for SSH", caller);
+            break;
+        default:
+            heading = i18n("%1 wants to use a certificate", caller);
+        }
     }
-    QString purpose;
-    QString purposeDetail;
-    switch (view->purpose) {
-    case XCC_PURPOSE_CLIENT_AUTH:
-        purpose = i18n("Authenticate to a server");
-        purposeDetail = i18n("The application will be able to authenticate as you until access expires. It cannot read the private key.");
-        break;
-    case XCC_PURPOSE_SIGNING:
-        purpose = i18n("Sign a document or data");
-        purposeDetail = i18n("The application will be able to have data signed with this key until access expires. It cannot read the private key.");
-        break;
-    case XCC_PURPOSE_EMAIL:
-        purpose = i18n("Use secure email");
-        purposeDetail = i18n("The application will be able to use this key for secure email until access expires. It cannot read the private key.");
-        break;
-    case XCC_PURPOSE_SSH:
-        purpose = i18n("Authenticate an SSH connection");
-        purposeDetail = i18n("The application will be able to authenticate SSH connections as you until access expires. It cannot read the private key.");
-        break;
+    const auto identity = unknown ? i18n("This app could not be identified. Continue only if you started this.")
+        : view->identity_level == XCC_IDENTITY_DERIVED_HOST ? i18n("The app name is reported by the app.") : QString();
+    QString reason;
+    if (view->untrusted_reason && *view->untrusted_reason) {
+        reason = unknown ? i18n("The app says “%1”", QString::fromUtf8(view->untrusted_reason))
+            : i18n("%1 says “%2”", caller, QString::fromUtf8(view->untrusted_reason));
     }
-    if (view->struct_size < offsetof(XccChooserView, generic_purpose) + sizeof(view->generic_purpose)) {
-        purpose = QString::fromUtf8(view->purpose_text);
-        purposeDetail = QString::fromUtf8(view->purpose_detail);
-    } else if (view->generic_purpose) {
-        purpose = i18n("Use a certificate on your security token");
-        purposeDetail = i18n("The application will be able to use this key until access expires. It cannot read the private key.");
-    }
-    const auto scope = view->may_sign && view->may_decrypt ? i18n("It allows signing and decryption.")
-        : view->may_decrypt                                ? i18n("It allows decryption only.")
-        : view->may_sign                                   ? i18n("It allows signing only.")
-                                                           : i18n("It allows no operations.");
-    const auto appId = QString::fromUtf8(view->app_id);
-    const bool callerFallback = view->struct_size >= offsetof(XccChooserView, display_flags) + sizeof(view->display_flags)
-        && (view->display_flags & XCC_DISPLAY_CALLER_FALLBACK);
-    const auto heading = callerFallback || !view->caller_name ? i18n("An unidentified application wants to use a certificate")
-        : i18n("%1 wants to use a certificate", QString::fromUtf8(view->caller_name));
-    m_context = { { u"heading"_s, heading }, { u"caller"_s, callerFallback || !view->caller_name ? i18n("An unidentified application") : QString::fromUtf8(view->caller_name) }, { u"appId"_s, appId },
-        { u"identity"_s, identity }, { u"purpose"_s, purpose }, { u"purposeDetail"_s, purposeDetail }, { u"scope"_s, scope },
-        { u"duration"_s, i18np("Access lasts for %1 second.", "Access lasts for %1 seconds.", view->lifetime_seconds) },
-        { u"laterPrompt"_s, view->later_prompt && *view->later_prompt ? i18n("After you choose, you will be asked for your security token PIN.") : QString() }, { u"reason"_s, QString::fromUtf8(view->untrusted_reason) },
-        { u"tokensPresent"_s, view->tokens_present } };
+    // app_id/identity_detail duplicate the old provenance explanation; no
+    // additional user action is conveyed by either, so omit both from the UI.
+    m_context = { { u"heading"_s, heading }, { u"caller"_s, caller }, { u"body"_s, formatBody(view) },
+        { u"identity"_s, identity }, { u"unknown"_s, unknown }, { u"reason"_s, reason }, { u"tokensPresent"_s, view->tokens_present } };
     endResetModel();
     Q_EMIT selectionChanged();
     Q_EMIT viewChanged();
@@ -224,6 +257,16 @@ int CertificateChooserModel::selectedRow() const
 {
     for (int i = 0; i < m_rows.size(); ++i) {
         if (m_rows[i].enabled && m_rows[i].id == m_selected) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+int CertificateChooserModel::rowForCandidateId(const QString &id) const
+{
+    for (int i = 0; i < m_rows.size(); ++i) {
+        if (m_rows[i].enabled && QString::number(qulonglong(m_rows[i].id)) == id) {
             return i;
         }
     }

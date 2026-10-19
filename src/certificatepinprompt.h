@@ -28,6 +28,7 @@ Q_SIGNALS:
     void discardInput();
 
 private:
+    void updateMessage();
     void setBusy(bool busy);
     XccContext *m_context;
     XccUiId m_id;
@@ -37,4 +38,5 @@ private:
     bool m_presented = false;
     bool m_settled = false;
     bool m_submitted = false;
+    bool m_incorrect = false;
 };

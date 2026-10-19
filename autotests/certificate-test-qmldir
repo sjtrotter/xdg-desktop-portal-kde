@@ -1,2 +1,3 @@
 module org.kde.xdgdesktopportal
 CertificatePinDialog 1.0 CertificatePinDialog.qml
+CertificateChooserDialog 1.0 CertificateChooserDialog.qml

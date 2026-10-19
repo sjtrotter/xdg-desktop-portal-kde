@@ -15,6 +15,26 @@ CertificatePinPrompt::CertificatePinPrompt(XccContext *context, XccUiId id, QObj
 
 QVariantMap CertificatePinPrompt::view() const { return m_view; }
 
+void CertificatePinPrompt::updateMessage()
+{
+    const bool locked = m_view.value(u"locked"_s).toBool();
+    const bool finalTry = m_view.value(u"finalTry"_s).toBool();
+    const auto retry = m_view.value(u"retry"_s).toString();
+    QString message;
+    if (locked) {
+        message = i18n("The PIN is locked. Unlock it with your PUK or ask your administrator.");
+    } else if (m_incorrect && finalTry) {
+        message = i18n("Wrong PIN. Another wrong PIN locks the token.");
+    } else if (m_incorrect && m_view.value(u"countLow"_s).toBool()) {
+        message = i18n("Wrong PIN. Few attempts may remain.");
+    } else {
+        // A status replaces a hint; hints appear only without a status.
+        message = retry.isEmpty() ? m_view.value(u"hint"_s).toString() : retry;
+    }
+    m_view[u"message"_s] = message;
+    m_view[u"messageError"_s] = locked || finalTry || m_incorrect || !retry.isEmpty();
+}
+
 bool CertificatePinPrompt::update(const XccPinView *view)
 {
     if (!view || view->struct_size < XCC_PIN_VIEW_V1_SIZE || view->abi_version != XCC_ABI_VERSION) {
@@ -26,70 +46,72 @@ bool CertificatePinPrompt::update(const XccPinView *view)
     if (!m_view.isEmpty() && m_view.value(u"protectedPath"_s).toBool() != view->protected_path) {
         return false;
     }
-    QString purpose;
-    if (view->struct_size < offsetof(XccPinView, generic_purpose) + sizeof(view->generic_purpose)) {
-        purpose = QString::fromUtf8(view->purpose_display);
-    } else {
-        purpose = i18n("Use a certificate");
-        if (!view->generic_purpose) {
-            switch (view->purpose) {
-            case XCC_PURPOSE_CLIENT_AUTH:
-                purpose = i18n("Authenticate to a server");
-                break;
-            case XCC_PURPOSE_SIGNING:
-                purpose = i18n("Sign a document or data");
-                break;
-            case XCC_PURPOSE_EMAIL:
-                purpose = i18n("Use secure email");
-                break;
-            case XCC_PURPOSE_SSH:
-                purpose = i18n("Authenticate an SSH connection");
-                break;
-            }
+    const bool callerFallback = view->struct_size >= offsetof(XccPinView, display_flags) + sizeof(view->display_flags)
+        && (view->display_flags & XCC_DISPLAY_CALLER_FALLBACK);
+    const auto caller = callerFallback || !view->caller_display || !*view->caller_display ? i18n("An unknown app") : QString::fromUtf8(view->caller_display);
+    QString body = i18n("%1 needs it to use your certificate.", caller);
+    if (view->struct_size >= offsetof(XccPinView, generic_purpose) + sizeof(view->generic_purpose) && !view->generic_purpose) {
+        switch (view->purpose) {
+        case XCC_PURPOSE_CLIENT_AUTH:
+            body = i18n("%1 needs it to identify you to a website.", caller);
+            break;
+        case XCC_PURPOSE_SIGNING:
+            body = i18n("%1 needs it to sign documents and data.", caller);
+            break;
+        case XCC_PURPOSE_EMAIL:
+            body = i18n("%1 needs it to use your email certificate.", caller);
+            break;
+        case XCC_PURPOSE_SSH:
+            body = i18n("%1 needs it to sign in to an SSH server.", caller);
+            break;
         }
     }
+    if (view->context_specific) {
+        body += u' ' + i18n("Your security token asks for the PIN before each signature.");
+    }
+    const auto heading = view->protected_path
+        ? (view->context_specific ? i18n("Enter your PIN again on the reader") : i18n("Enter your PIN on the reader"))
+        : (view->context_specific ? i18n("Enter your PIN again") : i18n("Enter your PIN"));
     QString retry = m_view.value(u"retry"_s).toString();
     const bool hasStatusCode = view->struct_size >= offsetof(XccPinView, status_code) + sizeof(view->status_code);
     const bool wantsFreshInput = hasStatusCode ? view->status_code != XCC_PIN_STATUS_NONE : view->status != nullptr;
     if (wantsFreshInput) {
+        m_incorrect = hasStatusCode && view->status_code == XCC_PIN_STATUS_INCORRECT;
         if (!hasStatusCode) {
             retry = QString::fromUtf8(view->status);
         } else {
             switch (view->status_code) {
             case XCC_PIN_STATUS_INCORRECT:
-                retry = i18n("That PIN was not accepted. Try again.");
+                retry = i18n("Wrong PIN. Try again.");
                 break;
             case XCC_PIN_STATUS_REQUIRED:
-                retry = i18n("Enter the PIN for this token.");
+                retry = i18n("Enter your PIN.");
                 break;
             case XCC_PIN_STATUS_TOO_LONG:
-                retry = i18n("PIN exceeds the supported length.");
+                retry = i18n("This PIN is too long.");
                 break;
             case XCC_PIN_STATUS_MEMORY_UNAVAILABLE:
-                retry = i18n("The PIN could not be held in secure memory.");
+                retry = i18n("The PIN could not be kept in secure memory.");
                 break;
             default:
-                retry = i18n("The PIN could not be submitted. Try again.");
+                retry = i18n("The PIN could not be sent to the token. Try again.");
             }
         }
         m_submitted = false;
         Q_EMIT freshInput();
     }
-    const auto hint = view->locked ? i18n("The PIN is locked.")
-        : view->final_try          ? i18n("This is the final PIN attempt. Another "
-                                          "incorrect PIN will lock the token.")
-        : view->count_low          ? i18n("The PIN has been entered incorrectly. Only a "
-                                          "few attempts may remain.")
-                                   : QString();
+    const auto hint = view->locked ? i18n("The PIN is locked. Unlock it with your PUK or ask your administrator.")
+        : view->final_try ? i18n("Last attempt. Another wrong PIN locks the token.")
+        : view->count_low ? i18n("A wrong PIN was entered before. Few attempts may remain.") : QString();
     const bool tokenFallback = view->struct_size >= offsetof(XccPinView, display_flags) + sizeof(view->display_flags)
         && (view->display_flags & XCC_DISPLAY_TOKEN_FALLBACK);
+    const auto token = tokenFallback || !view->token_label || !*view->token_label ? i18n("Unnamed token") : QString::fromUtf8(view->token_label);
+    const auto tokenLine = tokenFallback && view->reader && *view->reader ? i18n("Security token “%1” in %2", token, QString::fromUtf8(view->reader))
+        : i18n("Security token “%1”", token);
     m_view = {
-        { u"token"_s, tokenFallback ? i18n("Unnamed token") : QString::fromUtf8(view->token_label) },
-        { u"reader"_s, QString::fromUtf8(view->reader) },
-        { u"caller"_s, view->caller_display && *view->caller_display ? QString::fromUtf8(view->caller_display) : i18n("An unidentified application") },
-        { u"purpose"_s, purpose },
-        { u"authentication"_s,
-            view->context_specific ? i18n("Enter your PIN to authorize this operation.") : i18n("Enter your PIN to unlock the security token.") },
+        { u"heading"_s, heading },
+        { u"body"_s, body },
+        { u"tokenLine"_s, tokenLine },
         { u"contextSpecific"_s, view->context_specific },
         { u"protectedPath"_s, view->protected_path },
         { u"busy"_s, view->busy || m_submitted },
@@ -101,6 +123,7 @@ bool CertificatePinPrompt::update(const XccPinView *view)
         { u"warningPending"_s, m_warningPending },
         { u"ready"_s, m_presented },
     };
+    updateMessage();
     if (view->busy) {
         Q_EMIT discardInput();
     }
@@ -121,8 +144,8 @@ bool CertificatePinPrompt::warning(const XccWarning *warning)
     m_warningPending = true;
     m_view[u"warningPending"_s] = true;
     m_view[u"finalTry"_s] = true;
-    m_view[u"hint"_s] = i18n("This is the final PIN attempt. Another incorrect "
-                             "PIN will lock the token.");
+    m_view[u"hint"_s] = i18n("Last attempt. Another wrong PIN locks the token.");
+    updateMessage();
     Q_EMIT changed();
     return true;
 }
@@ -145,6 +168,8 @@ void CertificatePinPrompt::setBusy(bool busy)
     m_submitted = busy;
     m_view[u"busy"_s] = busy;
     m_view[u"retry"_s] = QString();
+    m_incorrect = false;
+    updateMessage();
     Q_EMIT changed();
 }
 
@@ -164,6 +189,10 @@ void CertificatePinPrompt::submit(CertificatePinField *field)
         setBusy(true); // Disable both input and submission before transfer.
         if (!field->submit(m_context, m_id)) {
             setBusy(false);
+            m_view[u"retry"_s] = i18n("The PIN could not be sent to the token. Try again.");
+            updateMessage();
+            Q_EMIT freshInput();
+            Q_EMIT changed();
         }
     }
 }

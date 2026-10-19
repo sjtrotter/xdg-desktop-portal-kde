@@ -34,6 +34,7 @@ private Q_SLOTS:
         QCOMPARE(firstId.toString(), QStringLiteral("18446744073709551615"));
         QCOMPARE(model.data(model.index(1), CertificateChooserModel::CandidateId).toString(), QStringLiteral("18446744073709551614"));
         QVERIFY(!model.hasSelection());
+        QCOMPARE(model.rowForCandidateId(QStringLiteral("18446744073709551615")), 0);
 
         // Focus can follow an unselected identity even when the rows reorder.
         std::swap(rows[0], rows[1]);
@@ -42,6 +43,8 @@ private Q_SLOTS:
         QCOMPARE(model.data(model.index(0), CertificateChooserModel::CandidateId).toString(), QStringLiteral("18446744073709551614"));
         QCOMPARE(model.data(model.index(1), CertificateChooserModel::CandidateId), firstId);
         QVERIFY(!model.hasSelection());
+        QCOMPARE(model.rowForCandidateId(QStringLiteral("18446744073709551615")), 1);
+        QCOMPARE(model.rowForCandidateId(QStringLiteral("missing")), -1);
     }
 
     void announcements()
@@ -51,8 +54,8 @@ private Q_SLOTS:
         XccChooserView view { };
         view.struct_size = sizeof(view);
         view.abi_version = XCC_ABI_VERSION;
-        const auto insertToken = i18n("Insert your security token");
-        const auto noMatch = i18n("Insert your security token. No certificate on the available tokens matches this request.");
+        const auto insertToken = i18n("Insert your security token. Certificates on it will appear here.");
+        const auto noMatch = i18n("No usable certificates on this token. Try a different security token.");
         const auto available = i18n("Certificates available on your security tokens");
         QVERIFY(model.update(&view));
         QCOMPARE(pending.count(), 1);
@@ -162,12 +165,13 @@ private Q_SLOTS:
         CertificateChooserModel model;
         for (const auto &locale : { QLocale(QLocale::English, QLocale::UnitedStates), QLocale(QLocale::German, QLocale::Germany) }) {
             QLocale::setDefault(locale);
-            const auto date = locale.toString(QDateTime::fromSecsSinceEpoch(row.not_after).date(), QLocale::ShortFormat);
+            const auto date = locale.toString(QDateTime::fromSecsSinceEpoch(row.not_after).date(),
+                                             i18nc("@info certificate expiry date format, see QDate::toString", "d MMM yyyy"));
             row.validity = XCC_VALIDITY_VALID;
             QVERIFY(model.update(&view));
-            QCOMPARE(model.data(model.index(0), CertificateChooserModel::Expiry).toString(), i18n("Valid until %1", date));
+            QCOMPARE(model.data(model.index(0), CertificateChooserModel::Expiry).toString(), i18n("Expires %1", date));
             QCOMPARE(model.data(model.index(0), CertificateChooserModel::Detail).toString(), i18n("%1 %2-bit", QStringLiteral("RSA"), uint32_t(2048)));
-            QCOMPARE(model.context().value(QStringLiteral("purpose")).toString(), i18n("Use a certificate on your security token"));
+            QCOMPARE(model.context().value(QStringLiteral("heading")).toString(), i18n("%1 wants to use a certificate", i18n("An unknown app")));
             row.validity = XCC_VALIDITY_EXPIRED;
             QVERIFY(model.update(&view));
             QCOMPARE(model.data(model.index(0), CertificateChooserModel::Expiry).toString(), i18n("Expired on %1", date));
@@ -182,7 +186,7 @@ private Q_SLOTS:
         row.not_after = 0;
         row.key_type = nullptr;
         QVERIFY(model.update(&view));
-        QCOMPARE(model.data(model.index(0), CertificateChooserModel::Expiry).toString(), i18n("Valid until %1", i18n("an unknown date")));
+        QCOMPARE(model.data(model.index(0), CertificateChooserModel::Expiry).toString(), i18n("Expires %1", i18n("an unknown date")));
         QCOMPARE(model.data(model.index(0), CertificateChooserModel::Detail).toString(), i18n("%1 %2-bit", i18n("Unknown key type"), uint32_t(2048)));
         row.key_type = keyType.constData();
         row.display_flags = XCC_DISPLAY_SUBJECT_FALLBACK | XCC_DISPLAY_ISSUER_FALLBACK | XCC_DISPLAY_TOKEN_FALLBACK;
@@ -193,7 +197,7 @@ private Q_SLOTS:
         QCOMPARE(model.data(model.index(0), CertificateChooserModel::Subject).toString(), i18n("Unnamed certificate"));
         QCOMPARE(model.data(model.index(0), CertificateChooserModel::Issuer).toString(), i18n("Unnamed issuer"));
         QCOMPARE(model.data(model.index(0), CertificateChooserModel::Token).toString(), i18n("Unnamed token"));
-        QCOMPARE(model.context().value(QStringLiteral("caller")).toString(), i18n("An unidentified application"));
+        QCOMPARE(model.context().value(QStringLiteral("caller")).toString(), i18n("An unknown app"));
     }
 
     void disclosure()
@@ -203,22 +207,57 @@ private Q_SLOTS:
         view.struct_size = sizeof(view);
         view.abi_version = XCC_ABI_VERSION;
         view.caller_name = "<b>Caller</b>";
+        view.identity_level = XCC_IDENTITY_VERIFIED_SANDBOXED;
+        view.may_sign = true;
+        view.lifetime_seconds = 300;
         view.later_prompt = "SDK later-prompt signal";
         QVERIFY(model.update(&view));
-        QCOMPARE(model.context().value(QStringLiteral("heading")).toString(), i18n("%1 wants to use a certificate", QStringLiteral("<b>Caller</b>")));
-        QCOMPARE(model.context().value(QStringLiteral("laterPrompt")).toString(), i18n("After you choose, you will be asked for your security token PIN."));
+        QCOMPARE(model.context().value(QStringLiteral("heading")).toString(), i18n("%1 wants to identify you with a certificate", QStringLiteral("<b>Caller</b>")));
+        QCOMPARE(model.context().value(QStringLiteral("body")).toString(), i18n("It can prove who you are to websites and servers for %1.", i18np("%1 minute", "%1 minutes", 5)) + u'\n' + i18n("You will enter your PIN next."));
         view.display_flags = XCC_DISPLAY_CALLER_FALLBACK;
         view.later_prompt = "";
         QVERIFY(model.update(&view));
-        QCOMPARE(model.context().value(QStringLiteral("heading")).toString(), i18n("An unidentified application wants to use a certificate"));
-        QVERIFY(model.context().value(QStringLiteral("laterPrompt")).toString().isEmpty());
+        QCOMPARE(model.context().value(QStringLiteral("heading")).toString(), i18n("%1 wants to identify you with a certificate", i18n("An unknown app")));
+        QVERIFY(!model.context().value(QStringLiteral("body")).toString().contains(i18n("You will enter your PIN next.")));
         view.caller_name = nullptr;
         view.display_flags = 0;
         view.later_prompt = nullptr;
         view.struct_size = XCC_CHOOSER_VIEW_V1_SIZE;
         QVERIFY(model.update(&view));
-        QCOMPARE(model.context().value(QStringLiteral("heading")).toString(), i18n("An unidentified application wants to use a certificate"));
-        QVERIFY(model.context().value(QStringLiteral("laterPrompt")).toString().isEmpty());
+        QCOMPARE(model.context().value(QStringLiteral("heading")).toString(), i18n("%1 wants to identify you with a certificate", i18n("An unknown app")));
+        QVERIFY(!model.context().value(QStringLiteral("body")).toString().contains(i18n("You will enter your PIN next.")));
+    }
+
+    void purposeAndIdentity()
+    {
+        CertificateChooserModel model;
+        XccChooserView view { };
+        view.struct_size = sizeof(view);
+        view.abi_version = XCC_ABI_VERSION;
+        view.caller_name = "Firefox";
+        view.identity_level = XCC_IDENTITY_VERIFIED_SANDBOXED;
+        view.may_sign = true;
+        view.purpose = XCC_PURPOSE_SIGNING;
+        view.lifetime_seconds = 3600;
+        QVERIFY(model.update(&view));
+        QCOMPARE(model.context().value(QStringLiteral("heading")).toString(), i18n("%1 wants to sign with your certificate", QStringLiteral("Firefox")));
+        QCOMPARE(model.context().value(QStringLiteral("body")).toString(), i18n("It can sign documents and data for %1.", i18np("%1 hour", "%1 hours", 1)));
+        QVERIFY(model.context().value(QStringLiteral("identity")).toString().isEmpty());
+        view.purpose = XCC_PURPOSE_EMAIL;
+        view.may_decrypt = true;
+        view.lifetime_seconds = 61;
+        view.identity_level = XCC_IDENTITY_DERIVED_HOST;
+        QVERIFY(model.update(&view));
+        QCOMPARE(model.context().value(QStringLiteral("body")).toString(), i18n("It can sign and decrypt email for %1.",
+            i18n("%1 and %2", i18np("%1 minute", "%1 minutes", 1), i18np("%1 second", "%1 seconds", 1))));
+        QCOMPARE(model.context().value(QStringLiteral("identity")).toString(), i18n("The app name is reported by the app."));
+        view.may_sign = false;
+        QVERIFY(model.update(&view));
+        QCOMPARE(model.context().value(QStringLiteral("body")).toString(), i18n("It can decrypt email for %1.",
+            i18n("%1 and %2", i18np("%1 minute", "%1 minutes", 1), i18np("%1 second", "%1 seconds", 1))));
+        view.identity_level = XCC_IDENTITY_UNKNOWN;
+        QVERIFY(model.update(&view));
+        QCOMPARE(model.context().value(QStringLiteral("caller")).toString(), i18n("An unknown app"));
     }
 
     void olderAndPartialLayouts()
@@ -250,8 +289,7 @@ private Q_SLOTS:
         QCOMPARE(model.rowCount(), 2);
         QCOMPARE(model.data(model.index(1), CertificateChooserModel::Expiry).toString(), QStringLiteral("Old English expiry"));
         QCOMPARE(model.data(model.index(1), CertificateChooserModel::Detail).toString(), QStringLiteral("Old English detail"));
-        QCOMPARE(model.context().value(QStringLiteral("purpose")).toString(), QStringLiteral("Old English purpose"));
-        QCOMPARE(model.context().value(QStringLiteral("purposeDetail")).toString(), QStringLiteral("Old English disclosure"));
+        QCOMPARE(model.context().value(QStringLiteral("body")).toString(), i18n("%1 Access lasts %2.", QStringLiteral("Old English disclosure"), i18np("%1 second", "%1 seconds", 0)));
         XccChooserCandidateView partial { };
         partial.struct_size = offsetof(XccChooserCandidateView, key_type);
         partial.abi_version = XCC_ABI_VERSION;
@@ -309,7 +347,7 @@ private Q_SLOTS:
         subject.fill('x'); // The model owns its copy.
         QCOMPARE(model.data(model.index(0), CertificateChooserModel::Subject).toString(), QStringLiteral("<b>Certificate</b>"));
         QCOMPARE(model.data(model.index(0), CertificateChooserModel::TextFormat).toInt(), int(Qt::PlainText));
-        QCOMPARE(model.context().value(QStringLiteral("reason")).toString(), QStringLiteral("<a href='external'>application reason</a>"));
+        QCOMPARE(model.context().value(QStringLiteral("reason")).toString(), i18n("The app says “%1”", QStringLiteral("<a href='external'>application reason</a>")));
         QVERIFY(model.flags(model.index(1)).testFlag(Qt::ItemIsEnabled));
         model.selectRow(1);
         QCOMPARE(model.selectedId(), uint64_t(2));

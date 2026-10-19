@@ -53,11 +53,13 @@ if(BUILD_CERTIFICATE_PORTAL)
     # same URI/output directory. The field is registered by CertificateUi.
     set_source_files_properties(${CMAKE_SOURCE_DIR}/src/CertificatePinDialog.qml
         PROPERTIES QT_RESOURCE_ALIAS CertificatePinDialog.qml)
+    set_source_files_properties(${CMAKE_SOURCE_DIR}/src/CertificateChooserDialog.qml
+        PROPERTIES QT_RESOURCE_ALIAS CertificateChooserDialog.qml)
     set_source_files_properties(certificate-test-qmldir PROPERTIES QT_RESOURCE_ALIAS qmldir)
     foreach(ui_test certificateadaptortest certificatepinbridgetest)
         qt_add_resources(${ui_test} ${ui_test}_certificate_test_ui
             PREFIX "/qt/qml/org/kde/xdgdesktopportal"
-            FILES ${CMAKE_SOURCE_DIR}/src/CertificatePinDialog.qml certificate-test-qmldir)
+            FILES ${CMAKE_SOURCE_DIR}/src/CertificatePinDialog.qml ${CMAKE_SOURCE_DIR}/src/CertificateChooserDialog.qml certificate-test-qmldir)
     endforeach()
     foreach(pin_test certificatepinfieldtest certificatepinbridgetest)
         target_compile_definitions(${pin_test} PRIVATE TRANSLATION_DOMAIN="xdg-desktop-portal-kde")
