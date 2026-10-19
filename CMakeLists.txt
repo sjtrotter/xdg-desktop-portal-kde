@@ -13,6 +13,12 @@ set(KDE_COMPILERSETTINGS_LEVEL "6.10.0")
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+option(BUILD_CERTIFICATE_PORTAL "Build the experimental Certificate1 portal" OFF)
+if(BUILD_CERTIFICATE_PORTAL)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(XCC REQUIRED IMPORTED_TARGET xdp-certificate-core-0)
+endif()
+
 ################# set KDE specific information #################
 
 find_package(ECM ${KF6_MIN_VERSION} REQUIRED NO_MODULE)

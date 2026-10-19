@@ -328,6 +328,21 @@ qt_add_dbus_interface(xdg_desktop_portal_kde_SRCS ../data/org.freedesktop.impl.p
 
 target_sources(xdg-desktop-portal-kde PRIVATE ${xdg_desktop_portal_kde_SRCS})
 
+if(BUILD_CERTIFICATE_PORTAL)
+    add_library(certificateportal STATIC
+        certificate.cpp certificate.h
+        certificatedispatcher.cpp certificatedispatcher.h
+        certificatechoosermodel.cpp certificatechoosermodel.h
+        certificateui.cpp certificateui.h)
+    target_link_libraries(certificateportal PUBLIC Qt::Core Qt::DBus PkgConfig::XCC
+        PRIVATE Qt::Quick Qt::Widgets KF6::I18n KF6::I18nQml KF6::WindowSystem)
+    target_include_directories(certificateportal PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+    target_compile_definitions(certificateportal PRIVATE TRANSLATION_DOMAIN="xdg-desktop-portal-kde")
+    target_compile_definitions(xdg-desktop-portal-kde PRIVATE BUILD_CERTIFICATE_PORTAL)
+    target_link_libraries(xdg-desktop-portal-kde PRIVATE certificateportal)
+    ecm_target_qml_sources(xdg-desktop-portal-kde SOURCES CertificateChooserDialog.qml)
+endif()
+
 target_link_libraries(xdg-desktop-portal-kde
 PRIVATE
     Qt::Core

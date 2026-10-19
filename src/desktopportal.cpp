@@ -18,6 +18,9 @@
 #include "appchooser.h"
 #include "background.h"
 #include "clipboard.h"
+#ifdef BUILD_CERTIFICATE_PORTAL
+#include "certificate.h"
+#endif
 #include "dynamiclauncher.h"
 #include "email.h"
 #include "filechooser.h"
@@ -64,6 +67,9 @@ DesktopPortal::DesktopPortal(QObject *parent)
         WaylandIntegration::init();
     }
     new UsbPortal(this);
+#ifdef BUILD_CERTIFICATE_PORTAL
+    new CertificatePortal(this);
+#endif
 
     // Fail-safe: close all sessions if the portal frontend disappears without closing them.
     connect(&m_frontendWatcher, &QDBusServiceWatcher::serviceUnregistered, this, [] {
