@@ -69,7 +69,9 @@ bool CertificatePinPrompt::update(const XccPinView *view)
     if (view->context_specific) {
         body += u' ' + i18n("Your security token asks for the PIN before each signature.");
     }
-    const auto heading = view->protected_path
+    const auto heading = view->locked ? i18n("PIN locked")
+        : view->final_try ? (view->protected_path ? i18n("Last PIN attempt on the reader") : i18n("Last PIN attempt"))
+        : view->protected_path
         ? (view->context_specific ? i18n("Enter your PIN again on the reader") : i18n("Enter your PIN on the reader"))
         : (view->context_specific ? i18n("Enter your PIN again") : i18n("Enter your PIN"));
     QString retry = m_view.value(u"retry"_s).toString();
@@ -101,7 +103,7 @@ bool CertificatePinPrompt::update(const XccPinView *view)
         Q_EMIT freshInput();
     }
     const auto hint = view->locked ? i18n("The PIN is locked. Unlock it with your PUK or ask your administrator.")
-        : view->final_try ? i18n("Last attempt. Another wrong PIN locks the token.")
+        : view->final_try ? i18n("Another wrong PIN locks the token.")
         : view->count_low ? i18n("A wrong PIN was entered before. Few attempts may remain.") : QString();
     const bool tokenFallback = view->struct_size >= offsetof(XccPinView, display_flags) + sizeof(view->display_flags)
         && (view->display_flags & XCC_DISPLAY_TOKEN_FALLBACK);
@@ -144,7 +146,8 @@ bool CertificatePinPrompt::warning(const XccWarning *warning)
     m_warningPending = true;
     m_view[u"warningPending"_s] = true;
     m_view[u"finalTry"_s] = true;
-    m_view[u"hint"_s] = i18n("Last attempt. Another wrong PIN locks the token.");
+    m_view[u"heading"_s] = m_view.value(u"locked"_s).toBool() ? i18n("PIN locked") : i18n("Last PIN attempt on the reader");
+    m_view[u"hint"_s] = i18n("Another wrong PIN locks the token.");
     updateMessage();
     Q_EMIT changed();
     return true;

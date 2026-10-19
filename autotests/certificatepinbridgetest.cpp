@@ -406,7 +406,7 @@ private Q_SLOTS:
         QTest::newRow("incorrect-final") << int(XCC_PIN_STATUS_INCORRECT) << false << true << true
             << i18n("Wrong PIN. Another wrong PIN locks the token.") << true;
         QTest::newRow("final") << int(XCC_PIN_STATUS_NONE) << false << true << true
-            << i18n("Last attempt. Another wrong PIN locks the token.") << true;
+            << i18n("Another wrong PIN locks the token.") << true;
         QTest::newRow("incorrect-low") << int(XCC_PIN_STATUS_INCORRECT) << false << false << true
             << i18n("Wrong PIN. Few attempts may remain.") << true;
         QTest::newRow("incorrect") << int(XCC_PIN_STATUS_INCORRECT) << false << false << false
@@ -444,6 +444,67 @@ private Q_SLOTS:
         QCOMPARE(prompt.view().value(u"message"_s).toString(), message);
         QCOMPARE(prompt.view().value(u"messageError"_s).toBool(), error);
     }
+    void pinHeadingPriority_data()
+    {
+        QTest::addColumn<bool>("locked");
+        QTest::addColumn<bool>("finalTry");
+        QTest::addColumn<bool>("protectedPath");
+        QTest::addColumn<bool>("contextSpecific");
+        QTest::addColumn<QString>("heading");
+        for (bool protectedPath : {false, true}) {
+            for (bool contextSpecific : {false, true}) {
+                const QByteArray suffix = QByteArray(protectedPath ? "-reader" : "-entry") + (contextSpecific ? "-again" : "");
+                QTest::newRow(QByteArray("normal" + suffix).constData()) << false << false << protectedPath << contextSpecific
+                    << (protectedPath ? (contextSpecific ? i18n("Enter your PIN again on the reader") : i18n("Enter your PIN on the reader"))
+                                      : (contextSpecific ? i18n("Enter your PIN again") : i18n("Enter your PIN")));
+                QTest::newRow(QByteArray("final" + suffix).constData()) << false << true << protectedPath << contextSpecific
+                    << (protectedPath ? i18n("Last PIN attempt on the reader") : i18n("Last PIN attempt"));
+                QTest::newRow(QByteArray("locked" + suffix).constData()) << true << true << protectedPath << contextSpecific
+                    << i18n("PIN locked");
+                QTest::newRow(QByteArray("locked-only" + suffix).constData()) << true << false << protectedPath << contextSpecific
+                    << i18n("PIN locked");
+            }
+        }
+    }
+    void pinHeadingPriority()
+    {
+        QFETCH(bool, locked);
+        QFETCH(bool, finalTry);
+        QFETCH(bool, protectedPath);
+        QFETCH(bool, contextSpecific);
+        QFETCH(QString, heading);
+        CertificatePinPrompt prompt(fakePinContext(), 1);
+        auto view = pinView(protectedPath);
+        view.locked = locked;
+        view.final_try = finalTry;
+        view.count_low = true; // Count-low alone leaves the normal heading.
+        view.context_specific = contextSpecific;
+        QVERIFY(prompt.update(&view));
+        QCOMPARE(prompt.view().value(u"heading"_s).toString(), heading);
+        view.status_code = XCC_PIN_STATUS_INCORRECT;
+        QVERIFY(prompt.update(&view));
+        QCOMPARE(prompt.view().value(u"heading"_s).toString(), heading);
+        view.locked = false;
+        view.final_try = false;
+        view.status_code = XCC_PIN_STATUS_NONE;
+        QVERIFY(prompt.update(&view));
+        QCOMPARE(prompt.view().value(u"heading"_s).toString(),
+                 protectedPath ? (contextSpecific ? i18n("Enter your PIN again on the reader") : i18n("Enter your PIN on the reader"))
+                               : (contextSpecific ? i18n("Enter your PIN again") : i18n("Enter your PIN")));
+    }
+    void finalTryWarningUpdatesHeading()
+    {
+        CertificatePinPrompt prompt(fakePinContext(), 1);
+        auto view = pinView(true);
+        view.context_specific = true;
+        QVERIFY(prompt.update(&view));
+        QCOMPARE(prompt.view().value(u"heading"_s).toString(), i18n("Enter your PIN again on the reader"));
+        XccWarning warning { sizeof(XccWarning), XCC_ABI_VERSION, XCC_WARNING_FINAL_TRY, 42, "ignored policy text" };
+        QVERIFY(prompt.warning(&warning));
+        QCOMPARE(prompt.view().value(u"heading"_s).toString(), i18n("Last PIN attempt on the reader"));
+        QCOMPARE(prompt.view().value(u"message"_s).toString(), i18n("Another wrong PIN locks the token."));
+        QVERIFY(prompt.view().value(u"messageError"_s).toBool());
+    }
     void wrongThenRightAndBusyCancellation()
     {
         CertificateUi bridge;
@@ -459,6 +520,7 @@ private Q_SLOTS:
         // or the queued presentation acknowledgement.
         QVERIFY(prompt->view().value(u"countLow"_s).toBool());
         QVERIFY(prompt->view().value(u"finalTry"_s).toBool());
+        QCOMPARE(prompt->view().value(u"heading"_s).toString(), i18n("Last PIN attempt"));
         QVERIFY(!prompt->view().value(u"hint"_s).toString().isEmpty());
         QCOMPARE(fakePin.ready, 0);
         QTRY_COMPARE(fakePin.ready, 1);
@@ -575,6 +637,7 @@ private Q_SLOTS:
         XccWarning warning { sizeof(XccWarning), XCC_ABI_VERSION, XCC_WARNING_FINAL_TRY, 42, "ignored policy text" };
         ui.warning(ui.user, 13, &warning);
         QVERIFY(prompt->view().value(u"warningPending"_s).toBool());
+        QCOMPARE(prompt->view().value(u"heading"_s).toString(), i18n("Last PIN attempt on the reader"));
         QCOMPARE(fakePin.warnings, 0); // Presentation never accepts a warning.
         QVERIFY(QMetaObject::invokeMethod(window(), "accept"));
         QCOMPARE(fakePin.warnings, 1);
