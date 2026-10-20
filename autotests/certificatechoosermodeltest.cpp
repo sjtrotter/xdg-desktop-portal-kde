@@ -4,6 +4,7 @@
 #include <KLocalizedString>
 #include <QDateTime>
 #include <QLocale>
+#include <QPersistentModelIndex>
 #include <QSignalSpy>
 #include <QTest>
 #include <limits>
@@ -135,6 +136,103 @@ private Q_SLOTS:
         QVERIFY(model.update(&view));
         QCOMPARE(model.takeAnnouncement(), insertToken);
         QVERIFY(model.takeAnnouncement().isEmpty());
+    }
+
+    void reading()
+    {
+        CertificateChooserModel model;
+        QSignalSpy pending(&model, &CertificateChooserModel::announcementPending);
+        QSignalSpy reset(&model, &QAbstractItemModel::modelReset);
+        XccChooserView view { };
+        view.struct_size = sizeof(view);
+        view.abi_version = XCC_ABI_VERSION;
+        QVERIFY(model.update(&view));
+        model.takeAnnouncement();
+        pending.clear();
+        view.tokens_reading = true;
+        ++view.revision;
+        QVERIFY(model.update(&view));
+        QVERIFY(model.context().value(QStringLiteral("tokensReading")).toBool());
+        QVERIFY(!model.hasSelection());
+        QCOMPARE(pending.count(), 1);
+        QCOMPARE(model.takeAnnouncement(), i18n("Reading security token… This can take a few seconds."));
+        QVERIFY(model.update(&view));
+        QCOMPARE(pending.count(), 1);
+        QVERIFY(model.takeAnnouncement().isEmpty());
+        view.tokens_reading = false;
+        view.tokens_present = true;
+        ++view.revision;
+        QVERIFY(model.update(&view));
+        QVERIFY(!model.context().value(QStringLiteral("tokensReading")).toBool());
+        QCOMPARE(model.takeAnnouncement(), i18n("No usable certificates on this token. Try a different security token."));
+        view.tokens_reading = true;
+        QVERIFY(model.update(&view));
+        QCOMPARE(model.takeAnnouncement(), i18n("Reading security token… This can take a few seconds."));
+        view.struct_size = offsetof(XccChooserView, tokens_reading);
+        QVERIFY(model.update(&view));
+        QVERIFY(!model.context().value(QStringLiteral("tokensReading")).toBool());
+        QCOMPARE(model.takeAnnouncement(), i18n("No usable certificates on this token. Try a different security token."));
+        view.struct_size = XCC_CHOOSER_VIEW_V1_SIZE;
+        QVERIFY(model.update(&view));
+        QVERIFY(!model.context().value(QStringLiteral("tokensReading")).toBool());
+        QVERIFY(model.takeAnnouncement().isEmpty());
+
+        XccChooserCandidateView row { };
+        row.struct_size = sizeof(row);
+        row.abi_version = XCC_ABI_VERSION;
+        row.id = 1;
+        view.struct_size = sizeof(view);
+        view.tokens_reading = false;
+        view.candidates = &row;
+        view.n_candidates = 1;
+        ++view.revision;
+        QVERIFY(model.update(&view));
+        model.selectRow(0);
+        QCOMPARE(model.takeAnnouncement(), i18n("Certificates available on your security tokens"));
+        reset.clear();
+        pending.clear();
+        QSignalSpy snapshot(&model, &CertificateChooserModel::snapshotAboutToChange);
+        QSignalSpy selection(&model, &CertificateChooserModel::selectionChanged);
+        const QPersistentModelIndex retained(model.index(0));
+        XccChooserCandidateView refreshed = row;
+        int transition = 0;
+        for (const bool reading : { true, false, true, false }) {
+            // Reading on/off, then a new snapshot completing the next read.
+            view.tokens_reading = reading;
+            ++view.revision;
+            if (++transition == 4) {
+                view.candidates = &refreshed;
+            }
+            QVERIFY(model.update(&view));
+            QCOMPARE(model.revision(), view.revision);
+            QCOMPARE(model.context().value(QStringLiteral("tokensReading")).toBool(), reading);
+            QCOMPARE(reset.count(), 0);
+            QCOMPARE(snapshot.count(), 0);
+            QCOMPARE(selection.count(), 0);
+            QVERIFY(retained.isValid());
+            QCOMPARE(pending.count(), 0);
+            QCOMPARE(model.rowCount(), 1);
+            QCOMPARE(model.selectedId(), uint64_t(1));
+            QVERIFY(model.hasSelection());
+            QVERIFY(model.takeAnnouncement().isEmpty());
+        }
+
+        // Details and identity changes must still reset, even during reading.
+        view.tokens_reading = true;
+        refreshed.fingerprint = "AB:CD";
+        ++view.revision;
+        QVERIFY(model.update(&view));
+        QCOMPARE(reset.count(), 1);
+        QCOMPARE(snapshot.count(), 1);
+        QVERIFY(!retained.isValid());
+        QCOMPARE(model.data(model.index(0), CertificateChooserModel::Fingerprint).toString(), QStringLiteral("AB:CD"));
+        QCOMPARE(model.selectedId(), uint64_t(1));
+        refreshed.id = 2;
+        ++view.revision;
+        QVERIFY(model.update(&view));
+        QCOMPARE(reset.count(), 2);
+        QCOMPARE(model.selectedId(), uint64_t(0));
+        QCOMPARE(model.rowForCandidateId(QStringLiteral("2")), 0);
     }
 
     void structuredFields()

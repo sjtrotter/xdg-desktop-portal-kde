@@ -143,6 +143,7 @@ bool CertificateChooserModel::update(const XccChooserView *view)
     if (!view || view->struct_size < XCC_CHOOSER_VIEW_V1_SIZE || view->abi_version != XCC_ABI_VERSION) {
         return false;
     }
+    const bool reading = xcc_chooser_view_tokens_reading(view);
     QList<Row> rows;
     QSet<uint64_t> ids;
     for (size_t i = 0; i < view->n_candidates; ++i) {
@@ -158,7 +159,8 @@ bool CertificateChooserModel::update(const XccChooserView *view)
             formatValidity(row), formatKey(row), QString::fromUtf8(row->fingerprint), true, row->invalid });
     }
     const auto announcement = rows.isEmpty()
-        ? (view->tokens_present ? i18n("No usable certificates on this token. Try a different security token.")
+        ? (reading ? i18n("Reading security token… This can take a few seconds.")
+            : view->tokens_present ? i18n("No usable certificates on this token. Try a different security token.")
                                 : i18n("Insert your security token. Certificates on it will appear here."))
         : i18n("Certificates available on your security tokens");
     // Compare identity sets, not counts or row positions: replacement can add a
@@ -169,8 +171,12 @@ bool CertificateChooserModel::update(const XccChooserView *view)
     }
     m_announcement = announcement;
     m_candidateIds = ids;
-    // Let the UI capture availability while the previous snapshot is intact.
-    Q_EMIT snapshotAboutToChange();
+    // Consent revisions advance even when reading leaves the rows unchanged.
+    const bool rowsChanged = rows != m_rows;
+    if (rowsChanged) {
+        // Let the UI capture availability while the previous snapshot is intact.
+        Q_EMIT snapshotAboutToChange();
+    }
     // Disable removed rows before notifying views of structural changes. Consent
     // and selection always check availability against this current snapshot.
     for (int i = 0; i < m_rows.size(); ++i) {
@@ -182,8 +188,10 @@ bool CertificateChooserModel::update(const XccChooserView *view)
     if (!ids.contains(m_selected)) {
         m_selected = 0;
     }
-    beginResetModel();
-    m_rows = std::move(rows);
+    if (rowsChanged) {
+        beginResetModel();
+        m_rows = std::move(rows);
+    }
     m_revision = view->revision;
     const bool unknown = view->identity_level == XCC_IDENTITY_UNKNOWN || !view->caller_name || !*view->caller_name
         || (view->struct_size >= offsetof(XccChooserView, display_flags) + sizeof(view->display_flags)
@@ -220,9 +228,12 @@ bool CertificateChooserModel::update(const XccChooserView *view)
     }
     m_context = { { u"heading"_s, heading }, { u"caller"_s, caller }, { u"body"_s, formatBody(view) },
         { u"appId"_s, unknown ? QString() : QString::fromUtf8(view->app_id) },
-        { u"identity"_s, identity }, { u"unknown"_s, unknown }, { u"reason"_s, reason }, { u"tokensPresent"_s, view->tokens_present } };
-    endResetModel();
-    Q_EMIT selectionChanged();
+        { u"identity"_s, identity }, { u"unknown"_s, unknown }, { u"reason"_s, reason },
+        { u"tokensPresent"_s, view->tokens_present }, { u"tokensReading"_s, reading } };
+    if (rowsChanged) {
+        endResetModel();
+        Q_EMIT selectionChanged();
+    }
     Q_EMIT viewChanged();
     if (announcementChanged) {
         Q_EMIT announcementPending();

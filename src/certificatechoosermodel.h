@@ -41,6 +41,7 @@ private:
         uint64_t id;
         QString subject, issuer, token, reader, expiry, detail, fingerprint;
         bool enabled, invalid;
+        bool operator==(const Row &) const = default;
     };
     QList<Row> m_rows;
     uint64_t m_selected = 0, m_revision = 0;

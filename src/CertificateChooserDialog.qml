@@ -317,14 +317,31 @@ Kirigami.AbstractApplicationWindow {
                 }
             }
             Kirigami.PlaceholderMessage {
+                id: emptyState
+                objectName: "certificatePlaceholder"
+                // The model supplies each state announcement once.
+                function _announce(): void {}
                 anchors.centerIn: parent
                 width: parent.width - 2 * Kirigami.Units.largeSpacing
                 visible: root.candidateModel.count === 0
                 icon.name: "auth-smartcard"
                 icon.width: 32
                 icon.height: 32
-                text: root.candidateModel.context.tokensPresent ? root.translations.i18n("No usable certificates on this token") : root.translations.i18n("Insert your security token")
-                explanation: root.candidateModel.context.tokensPresent ? root.translations.i18n("Try a different security token.") : root.translations.i18n("Certificates on it will appear here.")
+                text: root.candidateModel.context.tokensReading ? root.translations.i18n("Reading security token…")
+                    : root.candidateModel.context.tokensPresent ? root.translations.i18n("No usable certificates on this token") : root.translations.i18n("Insert your security token")
+                explanation: root.candidateModel.context.tokensReading ? root.translations.i18n("This can take a few seconds.")
+                    : root.candidateModel.context.tokensPresent ? root.translations.i18n("Try a different security token.") : root.translations.i18n("Certificates on it will appear here.")
+            }
+            QQC2.BusyIndicator {
+                objectName: "certificateReadingSpinner"
+                anchors.horizontalCenter: emptyState.horizontalCenter
+                y: emptyState.y
+                width: 32
+                height: 32
+                visible: root.candidateModel.count === 0 && root.candidateModel.context.tokensReading
+                running: visible
+                background: Rectangle { color: Kirigami.Theme.backgroundColor }
+                Accessible.ignored: true
             }
         }
         QQC2.DialogButtonBox {
@@ -335,6 +352,7 @@ Kirigami.AbstractApplicationWindow {
             onRejected: root.reject()
             Component.onCompleted: {
                 standardButton(QQC2.DialogButtonBox.Cancel).objectName = "certificateCancel";
+                standardButton(QQC2.DialogButtonBox.Ok).objectName = "certificateAllow";
                 standardButton(QQC2.DialogButtonBox.Ok).text = root.translations.i18nc("@action:button", "Allow");
                 standardButton(QQC2.DialogButtonBox.Ok).enabled = Qt.binding(() => root.candidateModel.hasSelection);
             }

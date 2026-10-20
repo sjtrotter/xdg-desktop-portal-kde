@@ -85,6 +85,88 @@ private Q_SLOTS:
         QVERIFY2(certificateTestBusHasNoActivation(QDBusConnection::sessionBus()), "Run through certificate-test-session.sh");
     }
     void init() { fakePin = { }; }
+    void chooserReading()
+    {
+        CertificateChooserModel model;
+        XccChooserView view { };
+        view.struct_size = sizeof(view);
+        view.abi_version = XCC_ABI_VERSION;
+        QVERIFY(model.update(&view));
+        QQmlEngine engine;
+        QQmlComponent component(&engine, QUrl(u"qrc:/qt/qml/org/kde/xdgdesktopportal/CertificateChooserDialog.qml"_s));
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> object(component.createWithInitialProperties({ { u"candidateModel"_s, QVariant::fromValue(&model) } }));
+        QVERIFY2(!object.isNull(), qPrintable(component.errorString()));
+        auto dialog = qobject_cast<QQuickWindow *>(object.data());
+        QVERIFY(dialog);
+        QVERIFY(QMetaObject::invokeMethod(dialog, "present"));
+        auto placeholder = dialog->findChild<QQuickItem *>(u"certificatePlaceholder"_s);
+        auto spinner = dialog->findChild<QQuickItem *>(u"certificateReadingSpinner"_s);
+        auto allow = dialog->findChild<QQuickItem *>(u"certificateAllow"_s);
+        QVERIFY(placeholder);
+        QVERIFY(spinner);
+        QVERIFY(allow);
+        QTRY_VERIFY(placeholder->isVisible());
+        QTRY_COMPARE(spinner->parentItem()->height(), qreal(144));
+        const auto viewportHeight = spinner->parentItem()->height();
+        for (const bool present : { false, true }) {
+            view.tokens_present = present;
+            view.tokens_reading = true;
+            ++view.revision;
+            QVERIFY(model.update(&view));
+            QTRY_COMPARE(placeholder->property("text").toString(), i18n("Reading security token…"));
+            QCOMPARE(placeholder->property("explanation").toString(), i18n("This can take a few seconds."));
+            QVERIFY(placeholder->isVisible());
+            QVERIFY(spinner->isVisible());
+            QVERIFY(spinner->property("running").toBool());
+            QVERIFY(!allow->isEnabled());
+            QCOMPARE(spinner->parentItem()->height(), viewportHeight);
+            QVERIFY(model.update(&view));
+            QVERIFY(!allow->isEnabled());
+            view.tokens_reading = false;
+            ++view.revision;
+            QVERIFY(model.update(&view));
+            QTRY_COMPARE(placeholder->property("text").toString(), present ? i18n("No usable certificates on this token") : i18n("Insert your security token"));
+            QCOMPARE(placeholder->property("explanation").toString(), present ? i18n("Try a different security token.") : i18n("Certificates on it will appear here."));
+            QVERIFY(!spinner->isVisible());
+            QVERIFY(!spinner->property("running").toBool());
+            QVERIFY(!allow->isEnabled());
+        }
+        view.tokens_reading = true;
+        view.struct_size = offsetof(XccChooserView, tokens_reading);
+        QVERIFY(model.update(&view));
+        QVERIFY(!spinner->isVisible());
+        QCOMPARE(placeholder->property("text").toString(), i18n("No usable certificates on this token"));
+        QVERIFY(!allow->isEnabled());
+
+        XccChooserCandidateView row { };
+        row.struct_size = sizeof(row);
+        row.abi_version = XCC_ABI_VERSION;
+        row.id = 1;
+        row.subject = "Subject";
+        row.issuer = "Issuer";
+        view.struct_size = sizeof(view);
+        view.tokens_reading = false;
+        view.candidates = &row;
+        view.n_candidates = 1;
+        ++view.revision;
+        QVERIFY(model.update(&view));
+        QTRY_VERIFY(!placeholder->isVisible());
+        QVERIFY(!spinner->isVisible());
+        model.selectRow(0);
+        QTRY_VERIFY(allow->isEnabled());
+        for (const bool reading : { true, false, true, false }) {
+            view.tokens_reading = reading;
+            ++view.revision;
+            QVERIFY(model.update(&view));
+            QCOMPARE(model.revision(), view.revision);
+            QVERIFY(!placeholder->isVisible());
+            QVERIFY(!spinner->isVisible());
+            QVERIFY(allow->isEnabled());
+            QCOMPARE(model.selectedId(), uint64_t(1));
+        }
+    }
+
     void chooserKeyboardAndRefresh()
     {
         CertificateChooserModel model;
@@ -316,6 +398,23 @@ private Q_SLOTS:
         QTRY_VERIFY(fingerprintVisible());
         fingerprint->forceActiveFocus(Qt::TabFocusReason);
         QTRY_COMPARE(dialog->activeFocusItem(), fingerprint);
+        const QPointer<QQuickItem> retainedRowB(rowB);
+        XccChooserCandidateView refreshed[] = { rows[0], rows[1] };
+        int transition = 0;
+        for (const bool reading : { true, false, true, false }) {
+            view.tokens_reading = reading;
+            ++view.revision;
+            if (++transition == 4) {
+                view.candidates = refreshed;
+            }
+            QVERIFY(model.update(&view));
+            QCOMPARE(model.revision(), view.revision);
+            QTRY_VERIFY(popup->property("opened").toBool());
+            QVERIFY(!retainedRowB.isNull());
+            QCOMPARE(dialog->activeFocusItem(), fingerprint);
+            QCOMPARE(model.selectedId(), uint64_t(1));
+            QCOMPARE(accepted.count(), 1);
+        }
         QTest::keyClick(dialog, Qt::Key_Escape);
         QTRY_VERIFY(!popup->property("opened").toBool());
         QTRY_COMPARE(dialog->activeFocusItem(), rowB);
