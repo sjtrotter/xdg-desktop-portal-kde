@@ -1,3 +1,27 @@
+Certificate portal coverage
+---------------------------
+
+Build with `-DBUILD_CERTIFICATE_PORTAL=ON` and the installed public
+`xdp-certificate-core-0` SDK. The redesigned chooser and PIN dialog use native
+Kirigami UI; card handling, login, retries and grant policy remain in the SDK.
+The chooser labels identified callers with the app id, warns for host or unknown
+identity, and formats certificate details from structured SDK fields. Sandboxed
+callers have no explicit sandbox-status label; that remains a gap against the
+certificate repository's trusted-dialog requirement. Its wording
+allows for later PIN use without promising an immediate prompt.
+
+Coverage is limited to container tests and SoftHSM runs: acquisition, RSA and ECDSA
+signing, regrant, cancellation, GnuTLS mutual TLS and NSS across expiry. KDE has no
+live-session or card run. PIN-pad and Cancel-on-final-try hardware checks remain
+unrun. Procedures are in the certificate repository's
+[TESTING.md](https://github.com/sjtrotter/xdg-desktop-portal-certificate/blob/main/docs/TESTING.md).
+
+The chooser consumes `tokens_reading` through the SDK's size-checked helper.
+Refresh with an empty list shows a spinner and reading message, announces the
+state once and disables Allow. Updates adopt each new consent revision while
+preserving unchanged rows, selection and open details; older producers mean no
+reading state. The chooser model and PIN bridge tests cover those transitions.
+
 Certificate portal PIN policy (open KDE review question)
 ------------------------------------------------------
 
@@ -10,8 +34,9 @@ text is retained in QML, QString/QVariant properties, signals, clipboard, undo o
 IME state, or logged by certificate code. Key text is read synchronously, and
 non-navigation key presses and releases are consumed in the C++ field.
 
-Unlike the standalone xdg-desktop-portal-certificate service (non-dumpable, no
-cores), the KDE backend preserves normal dumpability, core limits and KCrash.
+The KDE backend preserves normal dumpability, core limits and KCrash.
+The standalone xdg-desktop-portal-certificate service disables dumps and ordinary
+same-user attach.
 A crash dump or same-user ptrace of this backend can contain transient PIN copies
 from Qt key events and the input stack despite XccSecret pages being excluded
 from dumps. DrKonqi/KCrash crash reports may contain PIN fragments typed shortly
@@ -118,7 +143,7 @@ are compared in full, with additional DER, chain, metadata, key and policy check
 Three rows cover full SDK metadata, the original struct prefix and an incomplete
 extension. The latter two must fall back to the SDK's sanitized display fields.
 After each successful grant, malformed nested Sign parameters must produce the
-reference's response 2 and `invalid_request` error without a PIN prompt.
+reference's response `2` and `reason=invalid_request` without a PIN prompt.
 
 The ordinary certificateadaptortest also accepts the certificate repository's
 existing SOFTHSM_FIXTURE_DIR (including portal-test-rsa.der and module-path); its
