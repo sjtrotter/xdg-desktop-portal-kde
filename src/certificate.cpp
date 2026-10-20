@@ -36,7 +36,7 @@ template <typename T> T input()
     return value;
 }
 
-QVariantMap errorResults(const char *code) { return { { u"error"_s, QString::fromLatin1(code) } }; }
+QVariantMap errorResults(const char *code) { return { { u"reason"_s, QString::fromLatin1(code) } }; }
 
 QStringList strings(const char *const *values)
 {

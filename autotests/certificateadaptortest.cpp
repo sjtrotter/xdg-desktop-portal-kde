@@ -103,7 +103,7 @@ class CertificateAdaptorTest : public QObject
             u"org.example.CertificateTest"_s, QString(), options };
     }
 
-    void verifyResponse(const QDBusMessage &reply, uint response, const QString &error = { })
+    void verifyResponse(const QDBusMessage &reply, uint response, const QString &reason = { })
     {
         QCOMPARE(reply.type(), QDBusMessage::ReplyMessage);
         QCOMPARE(reply.signature(), u"ua{sv}"_s);
@@ -111,10 +111,10 @@ class CertificateAdaptorTest : public QObject
         QCOMPARE(reply.arguments()[0].metaType(), QMetaType::fromType<uint>());
         QCOMPARE(reply.arguments()[0].toUInt(), response);
         const auto results = qdbus_cast<QVariantMap>(reply.arguments()[1]);
-        if (error.isEmpty()) {
+        if (reason.isEmpty()) {
             QVERIFY(results.isEmpty());
         } else {
-            QCOMPARE(results, QVariantMap({ { u"error"_s, error } }));
+            QCOMPARE(results, QVariantMap({ { u"reason"_s, reason } }));
         }
     }
 
