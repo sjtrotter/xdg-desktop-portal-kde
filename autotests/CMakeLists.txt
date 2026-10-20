@@ -15,6 +15,10 @@ set_tests_properties(colorschemetest PROPERTIES ENVIRONMENT "CMAKE_RUNTIME_OUTPU
 ecm_add_test(inputcapturebarriertest.cpp ${CMAKE_SOURCE_DIR}/src/inputcapturebarrier.cpp TEST_NAME inputcapturebarriertest LINK_LIBRARIES Qt::Test Qt::Gui)
 
 if(BUILD_CERTIFICATE_PORTAL)
+    add_test(NAME certificatedescriptortest
+        COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/certificatedescriptortest.py
+            ${CMAKE_SOURCE_DIR} ${CMAKE_COMMAND} "${CMAKE_GENERATOR}" "${CMAKE_MAKE_PROGRAM}")
+    set_tests_properties(certificatedescriptortest PROPERTIES TIMEOUT 60)
     ecm_add_test(certificateconfigtest.cpp ${CMAKE_SOURCE_DIR}/src/certificateconfig.cpp
         TEST_NAME certificateconfigtest LINK_LIBRARIES Qt::Test KF6::ConfigCore PkgConfig::XCC)
     target_include_directories(certificateconfigtest PRIVATE ${CMAKE_SOURCE_DIR}/src)

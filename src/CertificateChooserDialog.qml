@@ -161,6 +161,17 @@ Kirigami.AbstractApplicationWindow {
                 wrapMode: Text.Wrap
             }
             QQC2.Label {
+                objectName: "certificateAppId"
+                Layout.fillWidth: true
+                visible: text.length > 0
+                text: root.candidateModel.context.appId
+                color: Kirigami.Theme.disabledTextColor
+                textFormat: Text.PlainText
+                horizontalAlignment: Text.AlignHCenter
+                elide: Text.ElideRight
+                maximumLineCount: 1
+            }
+            QQC2.Label {
                 Layout.fillWidth: true
                 text: root.candidateModel.context.body
                 textFormat: Text.PlainText
@@ -226,7 +237,6 @@ Kirigami.AbstractApplicationWindow {
                         required property string reader
                         required property string expiry
                         required property string detail
-                        required property string extraDetail
                         required property string fingerprint
                         required property bool available
                         required property bool invalid
@@ -298,7 +308,7 @@ Kirigami.AbstractApplicationWindow {
                                     root.focusedCandidateId = delegate.candidateId;
                                     root.details = { subject: delegate.subject, issuer: delegate.issuer,
                                         token: delegate.token, reader: delegate.reader, key: delegate.detail,
-                                        detail: delegate.extraDetail, fingerprint: delegate.fingerprint };
+                                        validity: delegate.expiry, fingerprint: delegate.fingerprint };
                                     detailsPopup.open();
                                 }
                             }
@@ -390,9 +400,10 @@ Kirigami.AbstractApplicationWindow {
                     wrapMode: Text.WrapAnywhere
                 }
                 QQC2.Label {
-                    Kirigami.FormData.label: root.translations.i18n("Details:")
+                    objectName: "certificateDetailsValidity"
+                    Kirigami.FormData.label: root.translations.i18n("Validity:")
                     Layout.fillWidth: true
-                    text: root.details.detail ?? ""
+                    text: root.details.validity ?? ""
                     textFormat: Text.PlainText
                     wrapMode: Text.WrapAnywhere
                 }

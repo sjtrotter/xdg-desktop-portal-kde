@@ -2,6 +2,7 @@ configure_file(org.freedesktop.impl.portal.desktop.kde.desktop.in org.freedeskto
 configure_file(org.freedesktop.impl.portal.desktop.kde.cmake.in org.freedesktop.impl.portal.desktop.kde.service @ONLY)
 
 if(BUILD_CERTIFICATE_PORTAL)
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/kde.portal")
     file(READ "${CMAKE_CURRENT_SOURCE_DIR}/kde.portal" certificate_portal_descriptor)
     string(REPLACE "org.freedesktop.impl.portal.Usb" "org.freedesktop.impl.portal.Usb;org.freedesktop.impl.portal.experimental.Certificate1"
         certificate_portal_descriptor "${certificate_portal_descriptor}")

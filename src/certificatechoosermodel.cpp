@@ -33,7 +33,7 @@ static QString formatValidity(const XccChooserCandidateView *row)
 static QString formatKey(const XccChooserCandidateView *row)
 {
     if (row->struct_size < offsetof(XccChooserCandidateView, key_size) + sizeof(row->key_size)) {
-        return QString::fromUtf8(row->detail);
+        return i18n("Unknown key type");
     }
     auto keyType = QString::fromUtf8(row->key_type);
     if (keyType.isEmpty()) {
@@ -82,9 +82,6 @@ static QString formatBody(const XccChooserView *view)
         body = view->may_decrypt ? i18n("It can sign documents and data and decrypt data for %1.", duration)
             : i18n("It can sign documents and data for %1.", duration);
     }
-    if (view->later_prompt && *view->later_prompt) {
-        body += u'\n' + i18n("You will enter your PIN next.");
-    }
     return body;
 }
 
@@ -116,8 +113,6 @@ QVariant CertificateChooserModel::data(const QModelIndex &index, int role) const
         return row.detail;
     case Fingerprint:
         return row.fingerprint;
-    case ExtraDetail:
-        return row.extraDetail;
     case Enabled:
         return row.enabled;
     case Invalid:
@@ -135,7 +130,7 @@ QVariant CertificateChooserModel::data(const QModelIndex &index, int role) const
 QHash<int, QByteArray> CertificateChooserModel::roleNames() const
 {
     return { { Subject, "subject" }, { Issuer, "issuer" }, { Token, "token" }, { Reader, "reader" }, { Expiry, "expiry" }, { Detail, "detail" },
-        { Fingerprint, "fingerprint" }, { Enabled, "available" }, { Invalid, "invalid" }, { TextFormat, "textFormat" }, { CandidateId, "candidateId" }, { ExtraDetail, "extraDetail" } };
+        { Fingerprint, "fingerprint" }, { Enabled, "available" }, { Invalid, "invalid" }, { TextFormat, "textFormat" }, { CandidateId, "candidateId" } };
 }
 
 Qt::ItemFlags CertificateChooserModel::flags(const QModelIndex &index) const
@@ -160,7 +155,7 @@ bool CertificateChooserModel::update(const XccChooserView *view)
         rows.append({ row->id, displayFlags & XCC_DISPLAY_SUBJECT_FALLBACK ? i18n("Unnamed certificate") : QString::fromUtf8(row->subject),
             displayFlags & XCC_DISPLAY_ISSUER_FALLBACK ? i18n("Unnamed issuer") : QString::fromUtf8(row->issuer),
             displayFlags & XCC_DISPLAY_TOKEN_FALLBACK ? i18n("Unnamed token") : QString::fromUtf8(row->token), QString::fromUtf8(row->reader),
-            formatValidity(row), formatKey(row), QString::fromUtf8(row->fingerprint), true, row->invalid, QString::fromUtf8(row->detail) });
+            formatValidity(row), formatKey(row), QString::fromUtf8(row->fingerprint), true, row->invalid });
     }
     const auto announcement = rows.isEmpty()
         ? (view->tokens_present ? i18n("No usable certificates on this token. Try a different security token.")
@@ -223,9 +218,8 @@ bool CertificateChooserModel::update(const XccChooserView *view)
         reason = unknown ? i18n("The app says “%1”", QString::fromUtf8(view->untrusted_reason))
             : i18n("%1 says “%2”", caller, QString::fromUtf8(view->untrusted_reason));
     }
-    // app_id/identity_detail duplicate the old provenance explanation; no
-    // additional user action is conveyed by either, so omit both from the UI.
     m_context = { { u"heading"_s, heading }, { u"caller"_s, caller }, { u"body"_s, formatBody(view) },
+        { u"appId"_s, unknown ? QString() : QString::fromUtf8(view->app_id) },
         { u"identity"_s, identity }, { u"unknown"_s, unknown }, { u"reason"_s, reason }, { u"tokensPresent"_s, view->tokens_present } };
     endResetModel();
     Q_EMIT selectionChanged();

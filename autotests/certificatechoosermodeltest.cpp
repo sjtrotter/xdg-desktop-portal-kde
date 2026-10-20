@@ -213,19 +213,20 @@ private Q_SLOTS:
         view.later_prompt = "SDK later-prompt signal";
         QVERIFY(model.update(&view));
         QCOMPARE(model.context().value(QStringLiteral("heading")).toString(), i18n("%1 wants to identify you with a certificate", QStringLiteral("<b>Caller</b>")));
-        QCOMPARE(model.context().value(QStringLiteral("body")).toString(), i18n("It can prove who you are to websites and servers for %1.", i18np("%1 minute", "%1 minutes", 5)) + u'\n' + i18n("You will enter your PIN next."));
+        const auto body = i18n("It can prove who you are to websites and servers for %1.", i18np("%1 minute", "%1 minutes", 5));
+        QCOMPARE(model.context().value(QStringLiteral("body")).toString(), body);
         view.display_flags = XCC_DISPLAY_CALLER_FALLBACK;
         view.later_prompt = "";
         QVERIFY(model.update(&view));
         QCOMPARE(model.context().value(QStringLiteral("heading")).toString(), i18n("%1 wants to identify you with a certificate", i18n("An unknown app")));
-        QVERIFY(!model.context().value(QStringLiteral("body")).toString().contains(i18n("You will enter your PIN next.")));
+        QCOMPARE(model.context().value(QStringLiteral("body")).toString(), body);
         view.caller_name = nullptr;
         view.display_flags = 0;
         view.later_prompt = nullptr;
         view.struct_size = XCC_CHOOSER_VIEW_V1_SIZE;
         QVERIFY(model.update(&view));
         QCOMPARE(model.context().value(QStringLiteral("heading")).toString(), i18n("%1 wants to identify you with a certificate", i18n("An unknown app")));
-        QVERIFY(!model.context().value(QStringLiteral("body")).toString().contains(i18n("You will enter your PIN next.")));
+        QVERIFY(!model.context().value(QStringLiteral("body")).toString().contains(QStringLiteral("PIN")));
     }
 
     void purposeAndIdentity()
@@ -260,6 +261,44 @@ private Q_SLOTS:
         QCOMPARE(model.context().value(QStringLiteral("caller")).toString(), i18n("An unknown app"));
     }
 
+    void appIdentity()
+    {
+        CertificateChooserModel model;
+        XccChooserView view { };
+        view.struct_size = sizeof(view);
+        view.abi_version = XCC_ABI_VERSION;
+        view.caller_name = "Example";
+        QByteArray appId("org.example.<b>App</b>");
+        view.app_id = appId.constData();
+        for (auto level : { XCC_IDENTITY_VERIFIED_SANDBOXED, XCC_IDENTITY_DERIVED_HOST }) {
+            view.identity_level = level;
+            QVERIFY(model.update(&view));
+            QCOMPARE(model.context().value(QStringLiteral("appId")).toString(), QString::fromUtf8(appId));
+        }
+        appId.fill('x');
+        QCOMPARE(model.context().value(QStringLiteral("appId")).toString(), QStringLiteral("org.example.<b>App</b>"));
+        view.identity_level = XCC_IDENTITY_UNKNOWN;
+        QVERIFY(model.update(&view));
+        QVERIFY(model.context().value(QStringLiteral("appId")).toString().isEmpty());
+        QCOMPARE(model.context().value(QStringLiteral("identity")).toString(), i18n("This app could not be identified. Continue only if you started this."));
+        view.identity_level = XCC_IDENTITY_VERIFIED_SANDBOXED;
+        view.display_flags = XCC_DISPLAY_CALLER_FALLBACK;
+        QVERIFY(model.update(&view));
+        QVERIFY(model.context().value(QStringLiteral("appId")).toString().isEmpty());
+        view.display_flags = 0;
+        view.caller_name = "";
+        QVERIFY(model.update(&view));
+        QVERIFY(model.context().value(QStringLiteral("appId")).toString().isEmpty());
+        view.caller_name = "Example";
+        view.app_id = nullptr;
+        QVERIFY(model.update(&view));
+        QVERIFY(model.context().value(QStringLiteral("appId")).toString().isEmpty());
+        view.app_id = "org.example.App";
+        view.struct_size = XCC_CHOOSER_VIEW_V1_SIZE;
+        QVERIFY(model.update(&view));
+        QCOMPARE(model.context().value(QStringLiteral("appId")).toString(), QStringLiteral("org.example.App"));
+    }
+
     void olderAndPartialLayouts()
     {
         // A real original array: the second row begins at the old producer stride.
@@ -288,7 +327,7 @@ private Q_SLOTS:
         QVERIFY(model.update(&view));
         QCOMPARE(model.rowCount(), 2);
         QCOMPARE(model.data(model.index(1), CertificateChooserModel::Expiry).toString(), QStringLiteral("Old English expiry"));
-        QCOMPARE(model.data(model.index(1), CertificateChooserModel::Detail).toString(), QStringLiteral("Old English detail"));
+        QCOMPARE(model.data(model.index(1), CertificateChooserModel::Detail).toString(), i18n("Unknown key type"));
         QCOMPARE(model.context().value(QStringLiteral("body")).toString(), i18n("%1 Access lasts %2.", QStringLiteral("Old English disclosure"), i18np("%1 second", "%1 seconds", 0)));
         XccChooserCandidateView partial { };
         partial.struct_size = offsetof(XccChooserCandidateView, key_type);
@@ -301,7 +340,7 @@ private Q_SLOTS:
         view.n_candidates = 1;
         QVERIFY(model.update(&view));
         QCOMPARE(model.data(model.index(0), CertificateChooserModel::Expiry).toString(), i18n("Not yet valid"));
-        QCOMPARE(model.data(model.index(0), CertificateChooserModel::Detail).toString(), QStringLiteral("Partial English detail"));
+        QCOMPARE(model.data(model.index(0), CertificateChooserModel::Detail).toString(), i18n("Unknown key type"));
         partial.struct_size = offsetof(XccChooserCandidateView, validity) + sizeof(partial.validity) - 1;
         QVERIFY(model.update(&view));
         QCOMPARE(model.data(model.index(0), CertificateChooserModel::Expiry).toString(), QStringLiteral("Partial English expiry"));

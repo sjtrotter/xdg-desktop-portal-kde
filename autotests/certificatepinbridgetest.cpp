@@ -10,6 +10,7 @@
 #include <QColor>
 #include <QGuiApplication>
 #include <QKeyEvent>
+#include <QJSValue>
 #include <QPointer>
 #include <QQmlComponent>
 #include <QQmlEngine>
@@ -191,11 +192,20 @@ private Q_SLOTS:
         rows[1].subject = subject.constData();
         rows[1].issuer = issuer.constData();
         rows[1].fingerprint = "AB:CD:EF:01";
+        rows[1].detail = "SDK English summary must not be displayed";
+        rows[1].token = "Token B";
+        rows[1].reader = "Reader B";
+        rows[1].key_type = "RSA";
+        rows[1].key_size = 2048;
+        rows[1].validity = XCC_VALIDITY_NOT_YET_VALID;
         XccChooserView view { };
         view.struct_size = sizeof(view);
         view.abi_version = XCC_ABI_VERSION;
         view.candidates = rows;
         view.n_candidates = 2;
+        view.caller_name = "Example";
+        view.app_id = "org.example.<b>App</b>";
+        view.identity_level = XCC_IDENTITY_VERIFIED_SANDBOXED;
         QVERIFY(model.update(&view));
         QQmlEngine engine;
         QQmlComponent component(&engine, QUrl(u"qrc:/qt/qml/org/kde/xdgdesktopportal/CertificateChooserDialog.qml"_s));
@@ -206,6 +216,18 @@ private Q_SLOTS:
         QVERIFY(dialog);
         QSignalSpy accepted(dialog, SIGNAL(accept()));
         QVERIFY(QMetaObject::invokeMethod(dialog, "present"));
+        auto appId = dialog->findChild<QQuickItem *>(u"certificateAppId"_s);
+        QVERIFY(appId);
+        QTRY_VERIFY(appId->isVisible());
+        QCOMPARE(appId->property("text").toString(), QString::fromUtf8(view.app_id));
+        QCOMPARE(appId->property("textFormat").toInt(), int(Qt::PlainText));
+        QCOMPARE(appId->property("maximumLineCount").toInt(), 1);
+        QCOMPARE(appId->property("elide").toInt(), int(Qt::ElideRight));
+        const auto siblings = appId->parentItem()->childItems();
+        const auto appIdIndex = siblings.indexOf(appId);
+        QVERIFY(appIdIndex > 0 && appIdIndex + 1 < siblings.size());
+        QCOMPARE(siblings[appIdIndex - 1]->property("text").toString(), model.context().value(u"heading"_s).toString());
+        QCOMPARE(siblings[appIdIndex + 1]->property("text").toString(), model.context().value(u"body"_s).toString());
         dialog->requestActivate();
         QTRY_VERIFY(dialog->activeFocusItem());
         QTRY_COMPARE(dialog->activeFocusItem()->property("candidateId").toString(), u"1"_s);
@@ -241,6 +263,14 @@ private Q_SLOTS:
         auto popup = dialog->findChild<QObject *>(u"certificateDetailsPopup"_s);
         QVERIFY(popup);
         QTRY_VERIFY(popup->property("opened").toBool());
+        const auto details = dialog->property("details").value<QJSValue>().toVariant().toMap();
+        QCOMPARE(details.value(u"token"_s).toString(), u"Token B"_s);
+        QCOMPARE(details.value(u"reader"_s).toString(), u"Reader B"_s);
+        QCOMPARE(details.value(u"key"_s).toString(), i18n("%1 %2-bit", u"RSA"_s, uint32_t(2048)));
+        QVERIFY(!details.contains(u"detail"_s));
+        auto validity = popup->findChild<QQuickItem *>(u"certificateDetailsValidity"_s);
+        QVERIFY(validity);
+        QCOMPARE(validity->property("text").toString(), i18n("Not yet valid"));
         QCOMPARE(model.selectedId(), uint64_t(1));
         QCOMPARE(accepted.count(), 1);
         for (const auto &entry : { std::pair { u"certificateDetailsSubject"_s, QString::fromUtf8(subject) },
@@ -314,6 +344,9 @@ private Q_SLOTS:
         QTest::keyClick(dialog, key);
         QCOMPARE(accepted.count(), 3);
         QCOMPARE(model.selectedId(), uint64_t(1));
+        view.identity_level = XCC_IDENTITY_UNKNOWN;
+        QVERIFY(model.update(&view));
+        QTRY_VERIFY(!appId->isVisible());
     }
 
     void pinFocusIndicatorFollowsSecureField()

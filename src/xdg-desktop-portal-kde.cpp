@@ -48,14 +48,7 @@ int main(int argc, char *argv[])
     parser.process(a);
     about.processCommandLine(&parser);
 
-    // Certificate PIN protection is scoped to XccSecret (mlock/MADV_DONTDUMP).
-    // Unlike the standalone non-dumpable, no-core certificate service, this
-    // backend keeps normal dumpability, core limits and KCrash for all portals.
-    // Crash dumps or same-user ptrace can expose transient Qt key/input copies;
-    // DrKonqi/KCrash reports may contain recently typed PIN fragments even
-    // though XccSecret pages are excluded from dumps. KDE review question:
-    // accept this risk, harden every portal, or collect PINs in a helper process?
-    // See autotests/README.certificate.md for the process-wide tradeoffs.
+    // Crash reports may contain transient PIN copies; see autotests/README.certificate.md.
     KCrash::initialize();
 
     const auto dbusQueueOption = parser.isSet(replaceOption) ? QDBusConnectionInterface::ReplaceExistingService : QDBusConnectionInterface::DontQueueService;
